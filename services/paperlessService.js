@@ -16,6 +16,12 @@ class PaperlessService {
     this._effectiveCountCache = null;
     this._effectiveCountCacheTtlMs = 60 * 1000;
     this._supportsTagsIdNone = null;
+    this._publicBaseUrlCache = {
+      value: null,
+      source: null,
+      expiresAt: 0
+    };
+    this._publicBaseUrlCacheTtlMs = 5 * 60 * 1000;
     // Dynamic cache lifetime from config (default: 5 minutes)
     // Lazy load to avoid circular dependency
     this._cacheTTL = null;
@@ -40,6 +46,150 @@ class PaperlessService {
         }
       });
     }
+  }
+
+  _normalizePublicBaseUrl(urlValue) {
+    if (!urlValue || typeof urlValue !== 'string') {
+      return null;
+    }
+
+    try {
+      const parsedUrl = new URL(urlValue.trim());
+      if (!['http:', 'https:'].includes(parsedUrl.protocol)) {
+        return null;
+      }
+
+      let basePath = parsedUrl.pathname.replace(/\/+$/, '');
+      basePath = basePath.replace(/\/api$/, '');
+
+      return `${parsedUrl.origin}${basePath}`;
+    } catch (_) {
+      return null;
+    }
+  }
+
+  _extractPublicBaseUrlCandidate(settingsPayload) {
+    if (!settingsPayload || typeof settingsPayload !== 'object') {
+      return null;
+    }
+
+    const preferredKeys = new Set([
+      'public_url',
+      'site_url',
+      'external_url',
+      'app_url',
+      'base_url',
+      'paperless_url'
+    ]);
+
+    const pending = [settingsPayload];
+    const visited = new Set();
+
+    while (pending.length > 0) {
+      const current = pending.shift();
+      if (!current || typeof current !== 'object') {
+        continue;
+      }
+      if (visited.has(current)) {
+        continue;
+      }
+      visited.add(current);
+
+      for (const [key, value] of Object.entries(current)) {
+        if (preferredKeys.has(String(key).toLowerCase()) && typeof value === 'string') {
+          const normalized = this._normalizePublicBaseUrl(value);
+          if (normalized) {
+            return normalized;
+          }
+        }
+
+        if (value && typeof value === 'object') {
+          pending.push(value);
+        }
+      }
+    }
+
+    return null;
+  }
+
+  async _discoverPublicBaseUrlFromApi() {
+    this.initialize();
+    if (!this.client) {
+      return null;
+    }
+
+    const discoveryEndpoints = ['/ui_settings/', '/config/'];
+    for (const endpoint of discoveryEndpoints) {
+      try {
+        const response = await this.client.get(endpoint);
+        const discoveredUrl = this._extractPublicBaseUrlCandidate(response?.data);
+        if (discoveredUrl) {
+          return discoveredUrl;
+        }
+      } catch (error) {
+        console.debug(`[DEBUG] public URL discovery failed on ${endpoint}: ${error.message}`);
+      }
+    }
+
+    return null;
+  }
+
+  _getConfiguredPublicBaseUrlFallback() {
+    const configuredApiUrl =
+      this.client?.defaults?.baseURL ||
+      config.paperless.apiUrl ||
+      process.env.PAPERLESS_API_URL ||
+      '';
+
+    return this._normalizePublicBaseUrl(configuredApiUrl);
+  }
+
+  async getPublicBaseUrlDetails(options = {}) {
+    const { forceRefresh = false } = options;
+    const now = Date.now();
+
+    if (!forceRefresh && this._publicBaseUrlCache.value && now < this._publicBaseUrlCache.expiresAt) {
+      return {
+        url: this._publicBaseUrlCache.value,
+        source: this._publicBaseUrlCache.source || 'api_url_fallback'
+      };
+    }
+
+    const manualOverrideUrl = this._normalizePublicBaseUrl(process.env.PAPERLESS_PUBLIC_URL || '');
+
+    let resolvedPublicUrl = '';
+    let source = 'unavailable';
+
+    if (manualOverrideUrl) {
+      resolvedPublicUrl = manualOverrideUrl;
+      source = 'manual_override';
+    } else {
+      const discoveredPublicUrl = await this._discoverPublicBaseUrlFromApi();
+      const fallbackPublicUrl = this._getConfiguredPublicBaseUrlFallback();
+      resolvedPublicUrl = discoveredPublicUrl || fallbackPublicUrl || '';
+
+      if (discoveredPublicUrl) {
+        source = 'paperless_api';
+      } else if (fallbackPublicUrl) {
+        source = 'api_url_fallback';
+      }
+    }
+
+    this._publicBaseUrlCache = {
+      value: resolvedPublicUrl,
+      source,
+      expiresAt: now + this._publicBaseUrlCacheTtlMs
+    };
+
+    return {
+      url: resolvedPublicUrl,
+      source
+    };
+  }
+
+  async getPublicBaseUrl(options = {}) {
+    const details = await this.getPublicBaseUrlDetails(options);
+    return details.url;
   }
 
   /**
@@ -1081,6 +1231,32 @@ class PaperlessService {
       return response.data.results;
     } catch (error) {
       console.error('[ERROR] fetching documents with metadata:', error.message);
+      return [];
+    }
+  }
+
+  async getRecentDocumentsWithMetadata(limit = 16) {
+    this.initialize();
+
+    const safeLimit = Number.isInteger(Number(limit)) ? Math.max(1, Math.min(Number(limit), 100)) : 16;
+
+    try {
+      const response = await this.client.get('/documents/', {
+        params: {
+          fields: 'id,title,tags,correspondent,created',
+          page: 1,
+          page_size: safeLimit,
+          ordering: '-created'
+        }
+      });
+
+      if (!Array.isArray(response?.data?.results)) {
+        return [];
+      }
+
+      return response.data.results;
+    } catch (error) {
+      console.error('[ERROR] fetching recent documents with metadata:', error.message);
       return [];
     }
   }

@@ -406,18 +406,134 @@ class PlaygroundAnalyzer {
         this.analysisOverlay = document.getElementById('playgroundAnalysisOverlay');
         this.analysisOverlayStatus = document.getElementById('playgroundAnalysisStatus');
         this.isAnalyzing = false;
+        this.maxBootstrapWaitMs = 20000;
         this.promptRating = new PromptRatingSystem(); // Initialize rating system here
 
         this.initialize();
     }
 
-    initialize() {
+    async initialize() {
         this.analyzeButton.addEventListener('click', () => this.startAnalysis());
+        this.analyzeButton.disabled = true;
         this.setupStyles();
-        this.initializeThumbnailLoadingState();
+        await this.loadBootstrapData();
     }
 
-    initializeThumbnailLoadingState() {
+    setInitialLoadingStatus(message) {
+        if (!this.initialLoadingStatus) return;
+        this.initialLoadingStatus.textContent = message;
+    }
+
+    escapeHtml(value) {
+        return `${value ?? ''}`
+            .replace(/&/g, '&amp;')
+            .replace(/</g, '&lt;')
+            .replace(/>/g, '&gt;')
+            .replace(/"/g, '&quot;')
+            .replace(/'/g, '&#039;');
+    }
+
+    formatDocumentDate(dateValue) {
+        if (!dateValue) return 'Unknown date';
+        const parsed = new Date(dateValue);
+        if (Number.isNaN(parsed.getTime())) return 'Unknown date';
+        return parsed.toLocaleDateString();
+    }
+
+    renderDocuments(documents, tagNames = {}, correspondentNames = {}) {
+        if (!this.documentsGrid) return;
+
+        const cardsMarkup = (Array.isArray(documents) ? documents : []).map((doc) => {
+            const safeTitle = this.escapeHtml(doc?.title || 'Untitled');
+            const documentId = Number(doc?.id);
+            const createdAt = this.formatDocumentDate(doc?.created);
+            const tags = Array.isArray(doc?.tags) ? doc.tags : [];
+
+            const tagsMarkup = tags.map((tagId) => {
+                const normalizedTagId = Number(tagId);
+                const tagName = tagNames?.[normalizedTagId] || 'Unknown';
+                return `<span class="tag text-xs px-2 py-1 rounded-full bg-blue-600 text-white" data-tag-id="${this.escapeHtml(normalizedTagId)}">${this.escapeHtml(tagName)}</span>`;
+            }).join('');
+
+            const correspondentId = Number(doc?.correspondent);
+            const hasCorrespondent = Number.isInteger(correspondentId);
+            const correspondentName = hasCorrespondent
+                ? (correspondentNames?.[correspondentId] || 'Unknown')
+                : '';
+
+            return `
+                <div class="material-card document-card" data-document-id="${this.escapeHtml(documentId)}">
+                    <div class="relative aspect-[3/4]">
+                        <div class="thumbnail-skeleton" data-thumb-skeleton aria-hidden="true"></div>
+                        <img src="data:image/gif;base64,R0lGODlhAQABAAAAACw=" data-thumb-src="/thumb/${this.escapeHtml(documentId)}" alt="${safeTitle}" class="playground-thumb w-full h-full object-cover rounded-lg" loading="lazy" decoding="async">
+                        <div class="tags-container absolute top-2 left-2 right-2 flex flex-wrap gap-1">${tagsMarkup}</div>
+                    </div>
+                    <div class="document-info">
+                        <div class="info-container">
+                            <div class="info-item">
+                                <h3 class="text-sm font-medium truncate">${safeTitle}</h3>
+                            </div>
+                            <div class="info-item">
+                                <p class="text-xs text-gray-600 truncate">${this.escapeHtml(createdAt)}</p>
+                                ${hasCorrespondent ? `<p class="text-xs text-gray-600 truncate" data-correspondent="${this.escapeHtml(correspondentId)}">${this.escapeHtml(correspondentName)}</p>` : ''}
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            `;
+        }).join('');
+
+        this.documentsGrid.innerHTML = cardsMarkup;
+    }
+
+    async loadBootstrapData() {
+        if (!this.documentsGrid) {
+            this.setInitialLoadingStatus('Document grid unavailable.');
+            return;
+        }
+
+        this.setInitialLoadingStatus('Loading document metadata...');
+
+        try {
+            const abortController = new AbortController();
+            const timeoutId = setTimeout(() => abortController.abort(), this.maxBootstrapWaitMs);
+            const response = await fetch('/api/playground/bootstrap', {
+                signal: abortController.signal
+            });
+            clearTimeout(timeoutId);
+
+            if (!response.ok) {
+                throw new Error('Failed to load playground data');
+            }
+
+            const payload = await response.json();
+            if (!payload?.success) {
+                throw new Error(payload?.error || 'Invalid playground bootstrap response');
+            }
+
+            const documents = Array.isArray(payload.documents) ? payload.documents : [];
+            this.renderDocuments(documents, payload.tagNames || {}, payload.correspondentNames || {});
+
+            if (documents.length === 0) {
+                this.setInitialLoadingStatus('No documents available.');
+                this.initialLoadingBlock?.setAttribute('aria-busy', 'false');
+                setTimeout(() => this.initialLoadingBlock?.classList.add('hidden'), 250);
+                this.analyzeButton.disabled = false;
+                return;
+            }
+
+            this.setInitialLoadingStatus(`Loaded ${documents.length} documents. Loading thumbnails...`);
+            await this.initializeThumbnailLoadingState();
+            this.analyzeButton.disabled = false;
+        } catch (error) {
+            console.error('Error loading playground bootstrap data:', error);
+            this.setInitialLoadingStatus('Failed to load playground data. Please refresh the page.');
+            this.initialLoadingBlock?.setAttribute('aria-busy', 'false');
+            this.analyzeButton.disabled = false;
+        }
+    }
+
+    async initializeThumbnailLoadingState() {
         if (!this.documentsGrid || !this.initialLoadingBlock) return;
 
         const images = Array.from(this.documentsGrid.querySelectorAll('.playground-thumb[data-thumb-src]'));
@@ -465,6 +581,7 @@ class PlaygroundAnalyzer {
                 }
 
                 const onLoad = () => {
+                    clearTimeout(timeoutId);
                     loaded += 1;
                     revealThumbnail(image, true);
                     updateInitialStatus();
@@ -472,11 +589,19 @@ class PlaygroundAnalyzer {
                 };
 
                 const onError = () => {
+                    clearTimeout(timeoutId);
                     failed += 1;
                     revealThumbnail(image, false);
                     updateInitialStatus();
                     resolve();
                 };
+
+                const timeoutId = setTimeout(() => {
+                    failed += 1;
+                    revealThumbnail(image, false);
+                    updateInitialStatus();
+                    resolve();
+                }, 15000);
 
                 image.addEventListener('load', onLoad, { once: true });
                 image.addEventListener('error', onError, { once: true });
@@ -499,28 +624,12 @@ class PlaygroundAnalyzer {
         };
 
         updateInitialStatus();
-        window.requestAnimationFrame(() => {
-            runWorkers().finally(() => {
-                this.initialLoadingBlock.setAttribute('aria-busy', 'false');
-                setTimeout(() => {
-                    this.initialLoadingBlock.classList.add('hidden');
-                }, 200);
-            });
-        });
+        await runWorkers();
 
+        this.initialLoadingBlock.setAttribute('aria-busy', 'false');
         setTimeout(() => {
-            if ((loaded + failed) < total && this.initialLoadingStatus) {
-                this.initialLoadingStatus.textContent = `Still loading ${loaded + failed}/${total} thumbnails...`;
-            }
-        }, 4000);
-
-        setTimeout(() => {
-            if ((loaded + failed) < total) {
-                this.initialLoadingBlock.setAttribute('aria-busy', 'false');
-                this.initialLoadingBlock.classList.add('hidden');
-            }
-        }, 20000);
-
+            this.initialLoadingBlock.classList.add('hidden');
+        }, 200);
     }
 
     setAnalysisLoadingState(isLoading, statusText = 'Analyzing documents...') {
@@ -885,5 +994,5 @@ class PlaygroundAnalyzer {
 // Initialize when DOM is loaded
 document.addEventListener('DOMContentLoaded', () => {
     window.playgroundAnalyzer = new PlaygroundAnalyzer();
-    window.promptRating = new PromptRatingSystem();
+    window.promptRating = window.playgroundAnalyzer.promptRating;
 });

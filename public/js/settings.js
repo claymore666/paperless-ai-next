@@ -648,6 +648,64 @@ function normalizeSystemPromptNewlines() {
     }
 }
 
+function mapPublicUrlSourceToLabel(source) {
+    const sourceMap = {
+        manual_override: 'Manual override',
+        paperless_api: 'Paperless API',
+        api_url_fallback: 'API URL fallback',
+        unavailable: 'Unavailable'
+    };
+
+    return sourceMap[source] || 'Unknown';
+}
+
+async function refreshDetectedPublicUrlStatus() {
+    const valueElement = document.getElementById('paperlessDetectedUrlValue');
+    const metaElement = document.getElementById('paperlessDetectedUrlMeta');
+    const refreshButton = document.getElementById('refreshPublicUrlDetection');
+
+    if (!valueElement || !metaElement) {
+        return;
+    }
+
+    if (refreshButton) {
+        refreshButton.disabled = true;
+    }
+
+    valueElement.textContent = 'Loading…';
+    metaElement.textContent = 'Resolving public URL…';
+
+    try {
+        const response = await fetch('/api/settings/paperless-public-url');
+        const result = await response.json();
+
+        if (!result.success) {
+            throw new Error(result.error || 'Failed to resolve public URL');
+        }
+
+        valueElement.textContent = result.publicUrl || 'Not available';
+        metaElement.textContent = `Source: ${mapPublicUrlSourceToLabel(result.source)}`;
+    } catch (error) {
+        valueElement.textContent = 'Not available';
+        metaElement.textContent = `Error: ${error.message}`;
+    } finally {
+        if (refreshButton) {
+            refreshButton.disabled = false;
+        }
+    }
+}
+
+function initializePublicUrlStatus() {
+    const refreshButton = document.getElementById('refreshPublicUrlDetection');
+    if (refreshButton) {
+        refreshButton.addEventListener('click', () => {
+            refreshDetectedPublicUrlStatus();
+        });
+    }
+
+    refreshDetectedPublicUrlStatus();
+}
+
 class URLValidator {
     constructor() {
         this.urlInput = document.getElementById('paperlessUrl');
@@ -1044,6 +1102,7 @@ document.addEventListener('DOMContentLoaded', () => {
     initializeCoreSettings();
     initializeFormHandlers();
     initializeTooltipAndValidation();
+    initializePublicUrlStatus();
     initializeCustomFieldsManagement();
 });
 
