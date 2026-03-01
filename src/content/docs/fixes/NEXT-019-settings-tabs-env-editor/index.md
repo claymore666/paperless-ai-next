@@ -1,51 +1,59 @@
-# NEXT-019: Settings UI rework with tab groups and runtime ENV editor
+---
+title: "NEXT-019: Settings UI rework with tabs and runtime ENV coverage"
+sidebar:
+  hidden: true
+---
 
-## Background
-The settings page had grown into a long, hard-to-navigate single form. It was difficult to see which options belong together, and several runtime-relevant Docker environment variables were not configurable from the UI.
+Use this page as the canonical template for documenting any new fix.
 
-The goal of this fix is to make settings maintenance faster and safer by introducing grouped tabs, adding inline hints for each setting, exposing additional runtime-relevant environment variables, and improving secret handling.
+## Feature / Problem Description
 
-## Changes
-- `views/settings.ejs`
-  - Reworked the settings form into grouped tabs: **System**, **AI**, **OCR**, and **Troubleshooting**.
-  - Added inline ENV hints for fields to show variable mapping and restart behavior.
-  - Added new settings sections for missing runtime-relevant variables:
-    - OCR (`MISTRAL_OCR_ENABLED`, `MISTRAL_API_KEY`, `MISTRAL_OCR_MODEL`)
-    - Troubleshooting/System (`RAG_SERVICE_ENABLED`, `RAG_SERVICE_URL`, `GLOBAL_RATE_LIMIT_WINDOW_MS`, `GLOBAL_RATE_LIMIT_MAX`, `TRUST_PROXY`, `MIN_CONTENT_LENGTH`, `PAPERLESS_AI_PORT`, `EXTERNAL_API_ALLOW_PRIVATE_IPS`)
-  - Sensitive input fields now use masked placeholders instead of rendering secret values directly.
+The settings screen had become a large single-page form that was hard to navigate and error-prone for operators.
 
-- `public/js/settings.js`
-  - Added tab navigation controller for the new multi-tab layout.
-  - Hardened form initialization to avoid null-reference issues when elements are absent.
-  - Updated provider toggle behavior so secret fields are no longer forced as required when existing values are already configured.
-  - Removed duplicate tag-cache clear event handler.
+Several runtime-relevant Docker environment values were missing from the UI, and handling of secret fields could lead to confusion during partial updates.
 
-- `routes/setup.js`
-  - Extended `GET /settings` config payload with additional runtime-relevant ENV values.
-  - Added server-side secret masking state (`configuredSecrets`) and stopped pre-filling secret values in rendered fields.
-  - Extended `POST /settings` to persist newly exposed ENV settings.
-  - Updated save logic to keep existing secret values when corresponding inputs are left empty.
-  - Improved provider validation flow to use effective values (new input or existing config).
-  - Fixed API key regeneration response format to include `newKey` consistently.
+This fix improves usability, completeness, and operational safety when maintaining configuration.
+
+## Implementation
+
+- Reworked the settings UI into grouped tabs: `System`, `AI`, `OCR`, `Troubleshooting`.
+- Added explicit ENV hints per field (mapping + restart expectations).
+- Added missing runtime-relevant fields in UI and persistence flow (OCR, RAG, rate limits, proxy, content threshold, app port, external API private IP toggle).
+- Improved secret handling so configured secret values are not prefilled and are preserved when inputs are left empty.
+- Hardened client-side settings initialization and provider toggle behavior to avoid unnecessary required-field blocking.
 
 ## Testing
-Manual validation performed:
-- Open settings page and verify tab navigation and grouped sections.
-- Verify provider-specific blocks toggle correctly in the AI tab.
-- Save settings with empty secret fields and confirm existing secrets are preserved.
-- Verify new OCR and Troubleshooting fields are submitted without server errors.
 
-Automated test execution note:
-- `npm run test -- tests/test-restriction-service.js` currently starts `nodemon server.js` (not a test runner) and fails due to a pre-existing server startup issue (`txtLogger.log is not a function` in `server.js`).
+Manual verification performed:
+
+- Open settings page and verify tab switching and grouped sections.
+- Verify provider-specific settings blocks toggle correctly.
+- Save with empty secret fields and confirm existing secrets stay unchanged.
+- Save newly exposed runtime fields and confirm persistence via settings reload.
+
+```bash
+node --check routes/setup.js
+node --check public/js/settings.js
+```
 
 ## Impact
-- Better settings UX through grouped tabs and reduced cognitive load.
-- Broader runtime configurability from the UI for relevant Docker env variables.
-- Improved security posture for secrets by avoiding direct prefill in form fields.
-- More robust backend save behavior for partial updates.
 
-## Upstream Status
-- [x] Not submitted
-- [ ] PR opened
-- [ ] Merged upstream
-- [ ] Upstream declined
+- Functionality / UX: Faster and clearer settings maintenance through tab grouping and field context.
+- Security: Safer handling of secret values in rendered forms and partial updates.
+- Operability: Broader runtime ENV coverage directly in UI reduces manual `.env` edits.
+
+## Further Links
+
+| Type | Link |
+| --- | --- |
+| Pull Request | Internal/local change set on main branch |
+| Related issue | N/A |
+| Upstream reference (optional) | N/A |
+
+## Implementation Record
+
+| Field | Value |
+| --- | --- |
+| ID | NEXT-019 |
+| Author | admonstrator |
+| Date | 2026-03-01 |

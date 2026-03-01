@@ -594,21 +594,7 @@ router.get('/sampleData/:id', async (req, res) => {
  */
 router.get('/playground', protectApiRoute, async (req, res) => {
   try {
-    const {
-      documents,
-      tagNames,
-      correspondentNames,
-      paperlessUrl
-    } = await documentsService.getDocumentsWithMetadata();
-
-    //limit documents to 16 items
-    documents.length = 16;
-
     res.render('playground', {
-      documents,
-      tagNames,
-      correspondentNames,
-      paperlessUrl,
       version: configFile.PAPERLESS_AI_VERSION || ' ',
       ragEnabled: process.env.RAG_SERVICE_ENABLED === 'true',
       chatEnabled: isChatEnabled()
@@ -616,6 +602,29 @@ router.get('/playground', protectApiRoute, async (req, res) => {
   } catch (error) {
     console.error('[ERRO] loading documents view:', error);
     res.status(500).send('Error loading documents');
+  }
+});
+
+router.get('/api/playground/bootstrap', protectApiRoute, async (req, res) => {
+  try {
+    const {
+      documents,
+      tagNames,
+      correspondentNames
+    } = await documentsService.getDocumentsWithMetadata();
+
+    res.json({
+      success: true,
+      documents,
+      tagNames,
+      correspondentNames
+    });
+  } catch (error) {
+    console.error('[ERROR] loading playground bootstrap data:', error);
+    res.status(500).json({
+      success: false,
+      error: 'Error loading playground data'
+    });
   }
 });
 
@@ -3320,6 +3329,7 @@ router.get('/settings', async (req, res) => {
   }
   let config = {
     PAPERLESS_API_URL: (process.env.PAPERLESS_API_URL || 'http://localhost:8000').replace(/\/api$/, ''),
+    PAPERLESS_PUBLIC_URL: process.env.PAPERLESS_PUBLIC_URL || '',
     PAPERLESS_API_TOKEN: process.env.PAPERLESS_API_TOKEN || '',
     PAPERLESS_USERNAME: process.env.PAPERLESS_USERNAME || '',
     AI_PROVIDER: process.env.AI_PROVIDER || 'openai',
@@ -3414,6 +3424,20 @@ router.get('/settings', async (req, res) => {
     success: isConfigured ? 'The application is already configured. You can update the configuration below.' : undefined,
     settingsError: showErrorCheckSettings ? 'Please check your settings. Something is not working correctly.' : undefined
   });
+});
+
+router.get('/api/settings/paperless-public-url', isAuthenticated, async (req, res) => {
+  try {
+    const details = await paperlessService.getPublicBaseUrlDetails({ forceRefresh: true });
+    return res.json({
+      success: true,
+      publicUrl: details.url,
+      source: details.source
+    });
+  } catch (error) {
+    console.error('[ERROR] GET /api/settings/paperless-public-url:', error);
+    return res.status(500).json({ success: false, error: 'Failed to detect Paperless public URL' });
+  }
 });
 
 /**
@@ -4672,6 +4696,7 @@ router.post('/settings', express.json(), async (req, res) => {
   try {
     const { 
       paperlessUrl, 
+      paperlessPublicUrl,
       paperlessToken,
       aiProvider,
       openaiKey,
@@ -4727,6 +4752,7 @@ router.post('/settings', express.json(), async (req, res) => {
 
     const currentConfig = {
       PAPERLESS_API_URL: process.env.PAPERLESS_API_URL || '',
+      PAPERLESS_PUBLIC_URL: process.env.PAPERLESS_PUBLIC_URL || '',
       PAPERLESS_API_TOKEN: process.env.PAPERLESS_API_TOKEN || '',
       PAPERLESS_USERNAME: process.env.PAPERLESS_USERNAME || '',
       AI_PROVIDER: process.env.AI_PROVIDER || '',
@@ -4858,6 +4884,7 @@ router.post('/settings', express.json(), async (req, res) => {
     const updatedConfig = {};
 
     if (paperlessUrl) updatedConfig.PAPERLESS_API_URL = paperlessUrl + '/api';
+    if (typeof paperlessPublicUrl === 'string') updatedConfig.PAPERLESS_PUBLIC_URL = paperlessPublicUrl.trim();
     if (hasPaperlessTokenInput) updatedConfig.PAPERLESS_API_TOKEN = effectivePaperlessToken;
     if (paperlessUsername) updatedConfig.PAPERLESS_USERNAME = paperlessUsername;
 
@@ -5140,10 +5167,12 @@ router.get('/dashboard/doc/:id', async (req, res) => {
     return res.status(400).json({ error: 'Document ID is required' });
   }
   try {
-    // Redirect to paperless-ngx and show detail page of the document (for example https://paperless.example.com/documents/887/details)
-    const paperlessUrl = process.env.PAPERLESS_API_URL;
-    const paperlessUrlWithoutApi = paperlessUrl.replace('/api', '');
-    const redirectUrl = `${paperlessUrlWithoutApi}/documents/${docId}/details`;
+    const paperlessPublicUrl = await paperlessService.getPublicBaseUrl();
+    if (!paperlessPublicUrl) {
+      return res.status(500).json({ error: 'Paperless public URL is not configured' });
+    }
+
+    const redirectUrl = `${paperlessPublicUrl}/documents/${docId}/details`;
     console.log('Redirecting to Paperless-ngx URL:', redirectUrl);
     res.redirect(redirectUrl);
   } catch (error) {
@@ -5260,8 +5289,7 @@ router.get('/api/ocr/queue', isAuthenticated, async (req, res) => {
       offset: start
     });
 
-    // Enrich with Paperless URL for linking
-    const paperlessUrl = (process.env.PAPERLESS_API_URL || '').replace('/api', '');
+    const paperlessUrl = await paperlessService.getPublicBaseUrl();
 
     return res.json({
       success: true,
@@ -5526,7 +5554,7 @@ router.get('/api/failed/queue', isAuthenticated, async (req, res) => {
       offset: start
     });
 
-    const paperlessUrl = (process.env.PAPERLESS_API_URL || '').replace('/api', '');
+    const paperlessUrl = await paperlessService.getPublicBaseUrl();
 
     return res.json({
       success: true,

@@ -6,41 +6,54 @@ class DocumentsService {
     // No local cache needed - using centralized cache in paperlessService
   }
 
-  async getTagNames() {
-    // Use centralized tag cache from paperlessService
-    const tags = await paperlessService.getTags();
-    const tagMap = new Map();
-    tags.forEach(tag => {
-      tagMap.set(tag.id, tag.name);
-    });
-    return Object.fromEntries(tagMap);
+  async getTagNames(tagIds = []) {
+    const uniqueTagIds = [...new Set((Array.isArray(tagIds) ? tagIds : []).map(id => Number(id)).filter(Number.isInteger))];
+    if (uniqueTagIds.length === 0) {
+      return {};
+    }
+
+    const tagEntries = await Promise.all(uniqueTagIds.map(async (tagId) => {
+      const tagName = await paperlessService.getTagNameById(tagId);
+      return [tagId, tagName || 'Unknown'];
+    }));
+
+    return Object.fromEntries(tagEntries);
   }
 
-  async getCorrespondentNames() {
-    // Use centralized correspondent data from paperlessService
-    const correspondents = await paperlessService.listCorrespondentsNames();
-    const corrMap = new Map();
-    correspondents.forEach(corr => {
-      corrMap.set(corr.id, corr.name);
-    });
-    return Object.fromEntries(corrMap);
+  async getCorrespondentNames(correspondentIds = []) {
+    const uniqueCorrespondentIds = [...new Set((Array.isArray(correspondentIds) ? correspondentIds : []).map(id => Number(id)).filter(Number.isInteger))];
+    if (uniqueCorrespondentIds.length === 0) {
+      return {};
+    }
+
+    const correspondentEntries = await Promise.all(uniqueCorrespondentIds.map(async (correspondentId) => {
+      const correspondent = await paperlessService.getCorrespondentNameById(correspondentId);
+      return [correspondentId, correspondent?.name || 'Unknown'];
+    }));
+
+    return Object.fromEntries(correspondentEntries);
   }
 
   async getDocumentsWithMetadata() {
-    const [documents, tagNames, correspondentNames] = await Promise.all([
-      paperlessService.getDocuments(),
-      this.getTagNames(),
-      this.getCorrespondentNames()
+    const documents = await paperlessService.getRecentDocumentsWithMetadata(16);
+
+    const tagIds = documents.flatMap((document) => Array.isArray(document.tags) ? document.tags : []);
+    const correspondentIds = documents
+      .map((document) => Number(document.correspondent))
+      .filter(Number.isInteger);
+
+    const [tagNames, correspondentNames] = await Promise.all([
+      this.getTagNames(tagIds),
+      this.getCorrespondentNames(correspondentIds)
     ]);
 
-    // Sort documents by created date (newest first)
-    documents.sort((a, b) => new Date(b.created) - new Date(a.created));
+    const paperlessUrl = await paperlessService.getPublicBaseUrl();
 
     return {
       documents,
       tagNames,
       correspondentNames,
-      paperlessUrl: process.env.PAPERLESS_API_URL.replace('/api', '')
+      paperlessUrl
     };
   }
 }
