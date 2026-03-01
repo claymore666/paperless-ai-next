@@ -24,14 +24,17 @@ The smallest image (~500–700 MB). Automatically tags, titles, and classifies d
 services:
   paperless-ai:
     image: admonstrator/paperless-ai-next:latest-lite
-    container_name: paperless-ai
+    container_name: paperless-ai-next
     restart: unless-stopped
     ports:
       - "3000:3000"
     volumes:
-      - ./data:/app/data
+      - data:/app/data
     environment:
       - PAPERLESS_AI_INITIAL_SETUP=yes
+
+volumes:
+  data:
 ```
 
 ### Full – AI tagging + semantic search
@@ -42,19 +45,26 @@ Larger image (~1.5–2 GB). Includes everything from Lite plus the RAG AI chat t
 services:
   paperless-ai:
     image: admonstrator/paperless-ai-next:latest-full
-    container_name: paperless-ai
+    container_name: paperless-ai-next
     restart: unless-stopped
     ports:
       - "3000:3000"
     volumes:
-      - ./data:/app/data
+      - data:/app/data
     environment:
       - PAPERLESS_AI_INITIAL_SETUP=yes
+
+volumes:
+  data:
 ```
 
 ---
 
 ## Start it up
+
+:::caution[Important]
+It is highly recommended to use an reverse proxy (e.g. Nginx, Caddy) in front of Paperless-AI next for security and performance, especially if you expose it to the internet - which is not a recommended practice at this time.
+:::
 
 ```bash
 docker compose up -d

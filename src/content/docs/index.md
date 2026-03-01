@@ -110,6 +110,10 @@ Documents with hard AI/OCR failures are tracked separately with manual reset flo
 
 Settings UI supports additional custom field types (Date and Boolean).
 
+### Better settings interface
+
+Improved UI with clearer explanations, tooltips, and validation.
+
 ***
 
 ## Supported AI providers
@@ -136,16 +140,23 @@ Works with OpenAI, Ollama (local), Azure OpenAI, DeepSeek, OpenRouter, Perplexit
 services:
   paperless-ai:
     image: admonstrator/paperless-ai-next:latest-lite
-    container_name: paperless-ai
+    container_name: paperless-ai-next
     restart: unless-stopped
     ports:
       - "3000:3000"
     volumes:
-      - ./data:/app/data
+      - data:/app/data
     environment:
       - PAPERLESS_AI_INITIAL_SETUP=yes
+
+volumes:
+  data:
 ```
 
 Open [http://localhost:3000](http://localhost:3000) and follow the setup wizard.
+
+:::caution[Important]
+It is highly recommended to use an reverse proxy (e.g. Nginx, Caddy) in front of Paperless-AI next for security and performance, especially if you expose it to the internet - which is not a recommended practice at this time.
+:::
 
 → [Full installation guide](getting-started/installation/)
