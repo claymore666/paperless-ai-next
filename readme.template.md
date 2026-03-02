@@ -34,7 +34,6 @@ Also consider supporting the **original author**:
 This fork collects pending upstream PRs, applies security patches, and tests improvements. Since the upstream project is no longer actively maintained, it has grown into the most up-to-date version available.
 
 > ⚠️ **Upstream Credit** – All original work belongs to [clusterzx](https://github.com/clusterzx)  
-> 📦 **Current Version** – `{{VERSION}}`
 
 📖 **[Full documentation →](https://paperless-ai-next.admon.me/)**
 
@@ -78,7 +77,7 @@ See the complete fix list in the documentation:
 
 ### Docker Compose (Recommended)
 
-Please check the docker variables [here](https://paperless-ai-next.admon.me/getting-started/configuration/#docker-environment-variables) for more configuration options.
+Please check the docker variables [here](https://paperless-ai-next.admon.me/getting-started/configuration/#docker-environment-variables) for all configuration options.
 
 **Lite version** – AI tagging & OCR only (~500–700 MB):
 
