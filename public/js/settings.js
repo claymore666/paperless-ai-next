@@ -1,32 +1,4 @@
 //settings.js
-// Theme Management
-class ThemeManager {
-    constructor() {
-        this.themeToggle = document.getElementById('themeToggle');
-        this.initialize();
-    }
-
-    initialize() {
-        const savedTheme = localStorage.getItem('theme') || 'light';
-        this.setTheme(savedTheme);
-        
-        this.themeToggle.addEventListener('click', () => this.toggleTheme());
-    }
-
-    setTheme(theme) {
-        document.documentElement.setAttribute('data-theme', theme);
-        localStorage.setItem('theme', theme);
-        
-        const icon = this.themeToggle.querySelector('i');
-        icon.className = theme === 'light' ? 'fas fa-moon' : 'fas fa-sun';
-    }
-
-    toggleTheme() {
-        const currentTheme = document.documentElement.getAttribute('data-theme');
-        const newTheme = currentTheme === 'light' ? 'dark' : 'light';
-        this.setTheme(newTheme);
-    }
-}
 
 class SettingsTabsManager {
     constructor() {
@@ -506,7 +478,6 @@ For the language:
 }
 
 function initializeCoreSettings() {
-    const themeManager = new ThemeManager();
     const settingsTabsManager = new SettingsTabsManager();
     const formManager = new FormManager();
     const tagsManager = new TagsManager('tagInput', 'tagsContainer', 'tags');
@@ -516,6 +487,120 @@ function initializeCoreSettings() {
 }
 
 function initializeFormHandlers() {
+    const restartOverlay = document.getElementById('restartOverlay');
+    const restartOverlayStatus = document.getElementById('restartOverlayStatus');
+    const restartOverlayBar = document.getElementById('restartOverlayBar');
+    const restartOverlayPercent = document.getElementById('restartOverlayPercent');
+    const restartOverlayActions = document.getElementById('restartOverlayActions');
+    const restartOverlayReloadBtn = document.getElementById('restartOverlayReloadBtn');
+    const restartOverlayRetryBtn = document.getElementById('restartOverlayRetryBtn');
+
+    let restartProgressInterval = null;
+
+    const delay = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+
+    function setRestartProgress(percent, message) {
+        const clamped = Math.max(0, Math.min(100, Math.floor(percent)));
+        if (restartOverlayBar) {
+            restartOverlayBar.style.width = `${clamped}%`;
+        }
+        if (restartOverlayPercent) {
+            restartOverlayPercent.textContent = `${clamped}%`;
+        }
+        if (restartOverlayStatus && message) {
+            restartOverlayStatus.textContent = message;
+        }
+    }
+
+    function showRestartOverlay(initialMessage) {
+        if (!restartOverlay) return;
+        restartOverlay.classList.remove('hidden');
+        if (restartOverlayActions) {
+            restartOverlayActions.classList.add('hidden');
+        }
+        setRestartProgress(6, initialMessage || 'Saving changes and waiting for server health check…');
+    }
+
+    function stopRestartProgressInterval() {
+        if (restartProgressInterval) {
+            clearInterval(restartProgressInterval);
+            restartProgressInterval = null;
+        }
+    }
+
+    function startRestartProgressInterval() {
+        stopRestartProgressInterval();
+        restartProgressInterval = setInterval(() => {
+            const currentPercent = Number((restartOverlayBar?.style.width || '6').replace('%', '')) || 6;
+            if (currentPercent >= 92) {
+                return;
+            }
+            const nextStep = currentPercent + Math.max(1, Math.floor(Math.random() * 6));
+            setRestartProgress(Math.min(92, nextStep));
+        }, 1200);
+    }
+
+    async function isServerHealthy() {
+        const response = await fetch('/health', {
+            method: 'GET',
+            cache: 'no-store',
+            headers: {
+                Accept: 'application/json'
+            }
+        });
+
+        if (!response.ok) {
+            return false;
+        }
+
+        const payload = await response.json().catch(() => null);
+        return !payload || payload.status === 'healthy';
+    }
+
+    async function waitForServerRecovery() {
+        const timeoutMs = 180000;
+        const startedAt = Date.now();
+        setRestartProgress(12, 'Restart in progress… checking server health.');
+        startRestartProgressInterval();
+
+        while (Date.now() - startedAt < timeoutMs) {
+            await delay(1800);
+            try {
+                const healthy = await isServerHealthy();
+                if (healthy) {
+                    stopRestartProgressInterval();
+                    setRestartProgress(100, 'Server is back. Reloading page…');
+                    await delay(500);
+                    window.location.reload();
+                    return;
+                }
+            } catch (error) {
+                // Ignore network errors while server is restarting
+            }
+        }
+
+        stopRestartProgressInterval();
+        setRestartProgress(95, 'Still waiting for server. You can retry the health check or reload manually.');
+        if (restartOverlayActions) {
+            restartOverlayActions.classList.remove('hidden');
+        }
+    }
+
+    if (restartOverlayReloadBtn) {
+        restartOverlayReloadBtn.addEventListener('click', () => {
+            window.location.reload();
+        });
+    }
+
+    if (restartOverlayRetryBtn) {
+        restartOverlayRetryBtn.addEventListener('click', async () => {
+            if (restartOverlayActions) {
+                restartOverlayActions.classList.add('hidden');
+            }
+            await waitForServerRecovery();
+        });
+    }
+
     // Clear Tag Cache Button Handler
     const clearTagCacheBtn = document.getElementById('clearTagCacheBtn');
     if (clearTagCacheBtn) {
@@ -616,6 +701,58 @@ function initializeFormHandlers() {
         });
     }
 
+    const forceModelRedownloadBtn = document.getElementById('forceModelRedownloadBtn');
+    if (forceModelRedownloadBtn) {
+        forceModelRedownloadBtn.addEventListener('click', async () => {
+            const confirmResult = await Swal.fire({
+                icon: 'warning',
+                title: 'Force model re-download?',
+                text: 'This clears the local model cache and re-downloads RAG models. Existing requests may be delayed while models are reinitialized.',
+                showCancelButton: true,
+                confirmButtonColor: '#d97706',
+                cancelButtonColor: '#3085d6',
+                confirmButtonText: 'Yes, re-download models'
+            });
+
+            if (!confirmResult.isConfirmed) {
+                return;
+            }
+
+            const originalHtml = forceModelRedownloadBtn.innerHTML;
+            try {
+                forceModelRedownloadBtn.disabled = true;
+                forceModelRedownloadBtn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Starting...';
+
+                const response = await fetch('/api/settings/rag-force-model-redownload', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json'
+                    }
+                });
+
+                const result = await response.json();
+                if (!result.success) {
+                    throw new Error(result.error || 'Failed to start model re-download');
+                }
+
+                await Swal.fire({
+                    icon: 'success',
+                    title: 'Model re-download started',
+                    text: result.message || 'RAG model refresh is running in the background. You can monitor progress in the RAG page status panel.'
+                });
+            } catch (error) {
+                await Swal.fire({
+                    icon: 'error',
+                    title: 'Action failed',
+                    text: error.message
+                });
+            } finally {
+                forceModelRedownloadBtn.disabled = false;
+                forceModelRedownloadBtn.innerHTML = originalHtml;
+            }
+        });
+    }
+
     // Form submission handler
     const setupForm = document.getElementById('setupForm');
     if (!setupForm) {
@@ -656,26 +793,8 @@ function initializeFormHandlers() {
                 });
 
                 if (result.restart) {
-                    let countdown = 5;
-                    const alert = Swal.fire({
-                        title: 'Restarting...',
-                        text: `Application will restart in ${countdown} seconds`,
-                        icon: 'info',
-                        showConfirmButton: false,
-                        allowOutsideClick: false
-                    });
-
-                    const countdownInterval = setInterval(() => {
-                        countdown--;
-                        if (countdown < 0) {
-                            clearInterval(countdownInterval);
-                            window.location.reload();
-                        } else {
-                            Swal.update({
-                                text: `Application will restart in ${countdown} seconds`
-                            });
-                        }
-                    }, 1000);
+                    showRestartOverlay('Restarting service… waiting for health checks to pass.');
+                    await waitForServerRecovery();
                 }
             } else {
                 throw new Error(result.error || 'An unknown error occurred');

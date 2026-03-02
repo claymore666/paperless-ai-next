@@ -1,41 +1,39 @@
 <!DOCTYPE html>
 <html lang="en" class="h-full" data-theme="light">
-<head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>About - Paperless-AI next</title>
-    <link rel="icon" type="image/webp" href="/favicon.webp">
-    <script src="/vendor/tailwind/tailwindcss-3.4.16.js"></script>
-    <link rel="stylesheet" href="/vendor/fontawesome/css/all.min.css">
-    <link rel="stylesheet" href="/css/dashboard.css">
-</head>
-<body class="h-full">
-    <button id="themeToggle" class="theme-toggle" aria-label="Toggle theme">
-        <i id="themeToggleIcon" class="fas fa-moon"></i>
-    </button>
-
-    <div class="layout-container">
-        <button id="mobileMenuButton" class="mobile-menu-button" aria-label="Open navigation menu">
-            <i class="fas fa-bars"></i>
-        </button>
-        <div id="sidebarOverlay" class="sidebar-overlay"></div>
-
-        <aside class="sidebar">
-            <div class="sidebar-header">
-                <img src="/favicon.webp" class="no-invert" alt="Paperless AI Logo" style="height: 60px;">
-                <h1 class="brand-title"><span class="relative inline-block">Paperless-AI<span class="absolute right-0 top-0 translate-x-1/2 -translate-y-1/2 rotate-12 inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-semibold bg-blue-100 text-blue-700">next</span></span><small style="display: block;"><%= version %></small></h1>
-            </div>
-
-            <nav class="sidebar-nav">
-                <%- include('partials/sidebar-nav', { chatEnabled, ragEnabled }) %>
-            </nav>
-        </aside>
-
-        <main class="main-content">
+<%- include('partials/shell/head-start', { pageTitle: 'About - Paperless-AI next' }) %>
+<%- include('partials/shell/head-end') %>
+<%- include('partials/shell/body-open', {
+    version: typeof version !== 'undefined' ? version : '',
+    chatEnabled: typeof chatEnabled !== 'undefined' ? chatEnabled : false,
+    ragEnabled: typeof ragEnabled !== 'undefined' ? ragEnabled : false
+}) %>
             <div class="content-wrapper space-y-6">
                 <div class="content-header">
                     <h1 class="content-title">About this Fork</h1>
                     <p class="text-sm text-gray-500 mt-1">Support information, project background, and author details.</p>
+                </div>
+
+                <div class="material-card">
+                    <h3 class="card-title">💖 Support the Project</h3>
+                    <div class="text-sm text-gray-600 space-y-3 leading-relaxed">
+                        <p>
+                            If you find this tool helpful, consider supporting its development:
+                        </p>
+                        <div class="flex flex-wrap gap-2">
+                            <a href="https://github.com/sponsors/admonstrator" target="_blank" rel="noopener noreferrer" aria-label="GitHub Sponsors" class="inline-flex">
+                                <img class="no-invert" alt="GitHub Sponsors" src="https://img.shields.io/badge/GitHub-Sponsors-EA4AAA?style=for-the-badge&amp;logo=github">
+                            </a>
+                            <a href="https://buymeacoffee.com/admon" target="_blank" rel="noopener noreferrer" aria-label="Buy Me A Coffee" class="inline-flex">
+                                <img class="no-invert" alt="Buy Me A Coffee" src="https://img.shields.io/badge/Buy%20Me%20A%20Coffee-FFDD00?style=for-the-badge&amp;logo=buy-me-a-coffee&amp;logoColor=black">
+                            </a>
+                            <a href="https://ko-fi.com/admon" target="_blank" rel="noopener noreferrer" aria-label="Ko-fi" class="inline-flex">
+                                <img class="no-invert" alt="Ko-fi" src="https://img.shields.io/badge/Ko--fi-FF5E5B?style=for-the-badge&amp;logo=ko-fi&amp;logoColor=white">
+                            </a>
+                            <a href="https://paypal.me/aaronviehl" target="_blank" rel="noopener noreferrer" aria-label="PayPal" class="inline-flex">
+                                <img class="no-invert" alt="PayPal" src="https://img.shields.io/badge/PayPal-00457C?style=for-the-badge&amp;logo=paypal&amp;logoColor=white">
+                            </a>
+                        </div>
+                    </div>
                 </div>
 
                 <div class="material-card">
@@ -53,6 +51,32 @@
                         <div class="p-3 rounded-lg bg-gray-50"><strong>RAG Enabled:</strong> <%= supportInfo.ragEnabled ? 'yes' : 'no' %></div>
                         <div class="p-3 rounded-lg bg-gray-50"><strong>Chat Enabled:</strong> <%= supportInfo.chatEnabled ? 'yes' : 'no' %></div>
                         <div class="p-3 rounded-lg bg-gray-50"><strong>Mistral OCR Enabled:</strong> <%= supportInfo.ocrEnabled ? 'yes' : 'no' %></div>
+                    </div>
+                </div>
+
+                <div class="material-card">
+                    <h3 class="card-title">Issue Reporting</h3>
+                    <p class="text-sm text-gray-600 mb-4">
+                        Open a prefilled issue report with version and environment details, or copy diagnostics to your clipboard.
+                    </p>
+                    <div class="flex flex-wrap gap-3">
+                        <a
+                            id="openPrefilledIssueBtn"
+                            href="https://github.com/admonstrator/paperless-ai-next/issues/new?template=bug_report.yml"
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            class="px-4 py-2 bg-blue-500 text-white rounded-lg hover:bg-blue-600 transition-colors text-sm"
+                        >
+                            <i class="fas fa-bug mr-2"></i>Open Issue Form
+                        </a>
+                        <button
+                            id="copyIssueDiagnosticsBtn"
+                            type="button"
+                            class="px-4 py-2 bg-gray-600 text-white rounded-lg hover:bg-gray-700 transition-colors text-sm"
+                        >
+                            <i class="fas fa-copy mr-2"></i>Copy Issue Details
+                        </button>
+                        <span id="issueHelperStatus" class="text-sm text-gray-500 self-center"></span>
                     </div>
                 </div>
 
@@ -82,29 +106,6 @@
                         </p>
                     </div>
                 </div>
-
-                <div class="material-card">
-                    <h3 class="card-title">💖 Support the Project</h3>
-                    <div class="text-sm text-gray-600 space-y-3 leading-relaxed">
-                        <p>
-                            If you find this tool helpful, consider supporting its development:
-                        </p>
-                        <div class="flex flex-wrap gap-2">
-                            <a href="https://github.com/sponsors/admonstrator" target="_blank" rel="noopener noreferrer" aria-label="GitHub Sponsors" class="inline-flex">
-                                <img class="no-invert" alt="GitHub Sponsors" src="https://img.shields.io/badge/GitHub-Sponsors-EA4AAA?style=for-the-badge&amp;logo=github">
-                            </a>
-                            <a href="https://buymeacoffee.com/admon" target="_blank" rel="noopener noreferrer" aria-label="Buy Me A Coffee" class="inline-flex">
-                                <img class="no-invert" alt="Buy Me A Coffee" src="https://img.shields.io/badge/Buy%20Me%20A%20Coffee-FFDD00?style=for-the-badge&amp;logo=buy-me-a-coffee&amp;logoColor=black">
-                            </a>
-                            <a href="https://ko-fi.com/admon" target="_blank" rel="noopener noreferrer" aria-label="Ko-fi" class="inline-flex">
-                                <img class="no-invert" alt="Ko-fi" src="https://img.shields.io/badge/Ko--fi-FF5E5B?style=for-the-badge&amp;logo=ko-fi&amp;logoColor=white">
-                            </a>
-                            <a href="https://paypal.me/aaronviehl" target="_blank" rel="noopener noreferrer" aria-label="PayPal" class="inline-flex">
-                                <img class="no-invert" alt="PayPal" src="https://img.shields.io/badge/PayPal-00457C?style=for-the-badge&amp;logo=paypal&amp;logoColor=white">
-                            </a>
-                        </div>
-                    </div>
-                </div>
                 
                 <div class="material-card">
                     <h3 class="card-title">About the Author 👋</h3>
@@ -124,21 +125,19 @@
                             Want updates, ideas, or just nerdy tech talk? 👇<br />
                             <a class="text-blue-600 hover:underline" href="https://admon.me" target="_blank" rel="noopener noreferrer">admon.me</a>
                         </p>
+                        <p>
+                            I am a trained IT specialist for system integration, not a classic full-time software engineer — and yes,
+                            I use AI heavily to move faster. But every change still gets human review, hands-on testing, and a lot of
+                            iteration time from me until it is stable, practical, and trustworthy in daily use. If you find issues, have ideas, or want to contribute, please reach out! ❤️🙌
+                        </p>
                     </div>
-                </div>
-                
-                <div class="material-card border-l-4 border-amber-400">
-                    <h3 class="card-title">Disclaimer (AI Assistance)</h3>
-                    <p class="text-sm text-gray-600 leading-relaxed">
-                        Parts of this project were created with AI assistance. However, architecture decisions,
-                        integration choices, reviews, and final changes are manually validated and tested.<br />
-                        AI support does not replace quality assurance, security review, or accountable maintainer decisions.
-                    </p>
                 </div>
             </div>
         </main>
     </div>
 
+    <script id="supportInfoPayload" type="application/json"><%- JSON.stringify(supportInfo || {}) %></script>
+
     <%- include('partials/scripts/about-scripts') %>
-</body>
-</html>
+    <%- include('partials/shell/footer') %>
+    <%- include('partials/shell/body-close') %>

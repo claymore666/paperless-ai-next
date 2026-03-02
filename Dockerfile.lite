@@ -11,7 +11,9 @@ RUN apt-get update && \
     curl \
     python3 \
     make \
-    g++ && \
+    g++ \
+    procps \
+    gosu && \
     apt-get clean && \
     rm -rf /var/lib/apt/lists/*
 
@@ -37,12 +39,15 @@ COPY --chown=node:node services ./services/
 COPY --chown=node:node views ./views/
 COPY --chown=node:node public ./public/
 COPY --chown=node:node schemas.js swagger.js ./
+COPY docker-entrypoint.sh ./
+
+RUN chmod +x docker-entrypoint.sh
 
 # Configure persistent data volume
 VOLUME ["/app/data"]
 
-# Run with same non-root user as full image for interchangeable behavior
-USER node
+# Runtime starts as root to initialize mounted volumes, then drops to node via entrypoint
+USER root
 
 # Configure application port
 EXPOSE ${PAPERLESS_AI_PORT:-3000}
@@ -57,6 +62,8 @@ ENV NODE_ENV=production \
     PAPERLESS_AI_COMMIT_SHA=${PAPERLESS_AI_COMMIT_SHA}
 
 LABEL org.opencontainers.image.revision=${PAPERLESS_AI_COMMIT_SHA}
+
+ENTRYPOINT ["./docker-entrypoint.sh"]
 
 # Start only Node.js service using PM2
 CMD ["pm2-runtime", "ecosystem.config.js"]

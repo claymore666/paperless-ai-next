@@ -1,31 +1,38 @@
-// Theme Management
-class ThemeManager {
-    constructor() {
-        this.themeToggle = document.getElementById('themeToggle');
-        this.initialize();
+function resolveDashboardData() {
+    if (window.dashboardData && typeof window.dashboardData === 'object') {
+        return window.dashboardData;
     }
 
-    initialize() {
-        const savedTheme = localStorage.getItem('theme') || 'light';
-        this.setTheme(savedTheme);
-        console.log('Theme initialized');
-        this.themeToggle.addEventListener('click', () => this.toggleTheme());
+    const payloadElement = document.getElementById('dashboardDataPayload');
+    if (!payloadElement) {
+        return {
+            documentCount: 0,
+            processedCount: 0,
+            ocrNeededCount: 0,
+            failedCount: 0,
+            tokenDistribution: [],
+            documentTypes: []
+        };
     }
 
-    setTheme(theme) {
-        document.documentElement.setAttribute('data-theme', theme);
-        localStorage.setItem('theme', theme);
-        
-        const icon = this.themeToggle.querySelector('i');
-        icon.className = theme === 'light' ? 'fas fa-moon' : 'fas fa-sun';
+    let parsedData = {};
+    try {
+        parsedData = JSON.parse(payloadElement.textContent || '{}');
+    } catch (error) {
+        console.error('Failed to parse dashboardDataPayload:', error);
     }
 
-    toggleTheme() {
-        const currentTheme = document.documentElement.getAttribute('data-theme');
-        const newTheme = currentTheme === 'light' ? 'dark' : 'light';
-        this.setTheme(newTheme);
-        console.log('Theme toggled to: ' + newTheme);
-    }
+    const resolved = {
+        documentCount: Number(parsedData.documentCount || 0),
+        processedCount: Number(parsedData.processedDocumentCount || 0),
+        ocrNeededCount: Number(parsedData.ocrNeededCount || 0),
+        failedCount: Number(parsedData.failedCount || 0),
+        tokenDistribution: Array.isArray(parsedData.tokenDistribution) ? parsedData.tokenDistribution : [],
+        documentTypes: Array.isArray(parsedData.documentTypes) ? parsedData.documentTypes : []
+    };
+
+    window.dashboardData = resolved;
+    return resolved;
 }
 
 // Chart Initialization
@@ -36,12 +43,13 @@ class ChartManager {
     }
 
     initializeDocumentChart() {
+        const dashboardData = resolveDashboardData();
         const {
             documentCount,
             processedCount,
             ocrNeededCount = 0,
             failedCount = 0
-        } = window.dashboardData;
+        } = dashboardData;
         const remainingCount = Math.max(0, documentCount - processedCount - ocrNeededCount - failedCount);
 
         const ctx = document.getElementById('documentChart').getContext('2d');
@@ -105,7 +113,7 @@ class DashboardStatsLoader {
     }
 
     getFallbackStats() {
-        const dashboardData = window.dashboardData || {};
+        const dashboardData = resolveDashboardData() || {};
         return {
             paperless_data: {
                 documentCount: Number(dashboardData.documentCount || 0),
@@ -128,7 +136,19 @@ class DashboardStatsLoader {
 
     setLoadingState(isLoading) {
         if (this.loadingBlock) {
-            this.loadingBlock.classList.toggle('hidden', !isLoading);
+            if (isLoading) {
+                this.loadingBlock.classList.remove('hidden');
+                requestAnimationFrame(() => {
+                    this.loadingBlock.classList.remove('opacity-0');
+                    this.loadingBlock.classList.add('opacity-100');
+                });
+            } else {
+                this.loadingBlock.classList.remove('opacity-100');
+                this.loadingBlock.classList.add('opacity-0');
+                setTimeout(() => {
+                    this.loadingBlock.classList.add('hidden');
+                }, 300);
+            }
             this.loadingBlock.setAttribute('aria-busy', isLoading ? 'true' : 'false');
         }
 
@@ -461,7 +481,6 @@ async function showCorrespondentDetails() {
 
 // Initialize everything when DOM is loaded
 document.addEventListener('DOMContentLoaded', () => {
-    window.themeManager = new ThemeManager();
     window.navigationManager = new NavigationManager();
     window.chartManager = new ChartManager();
     window.modalManager = new ModalManager();

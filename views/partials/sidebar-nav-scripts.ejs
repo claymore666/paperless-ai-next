@@ -1,5 +1,61 @@
 <script>
+    // Global CSRF fetch interceptor
+    (function() {
+        const originalFetch = window.fetch;
+        window.fetch = async (...args) => {
+            let [resource, config] = args;
+            
+            // Default config if not provided
+            if (!config) config = {};
+            
+            const method = (config.method || 'GET').toUpperCase();
+            const ignoredMethods = ['GET', 'HEAD', 'OPTIONS'];
+            
+            // Only add CSRF token for state-changing methods
+            if (!ignoredMethods.includes(method)) {
+                const csrfToken = document.querySelector('meta[name="csrf-token"]')?.getAttribute('content');
+                if (csrfToken) {
+                    if (!config.headers) config.headers = {};
+                    
+                    // Handle both Headers object and plain object
+                    if (config.headers instanceof Headers) {
+                        if (!config.headers.has('X-CSRF-Token')) {
+                            config.headers.append('X-CSRF-Token', csrfToken);
+                        }
+                    } else {
+                        if (!config.headers['X-CSRF-Token'] && !config.headers['x-csrf-token']) {
+                            config.headers['X-CSRF-Token'] = csrfToken;
+                        }
+                    }
+                }
+            }
+            
+            return originalFetch(resource, config);
+        };
+    })();
+
     document.addEventListener('DOMContentLoaded', function () {
+        const themeToggle = document.getElementById('themeToggle');
+        const themeIcon = document.getElementById('themeToggleIcon') || themeToggle?.querySelector('i');
+
+        function applyTheme(theme) {
+            document.documentElement.setAttribute('data-theme', theme);
+            localStorage.setItem('theme', theme);
+            if (themeIcon) {
+                themeIcon.className = theme === 'light' ? 'fas fa-moon' : 'fas fa-sun';
+            }
+        }
+
+        applyTheme(localStorage.getItem('theme') || 'light');
+
+        if (themeToggle) {
+            themeToggle.addEventListener('click', function () {
+                const currentTheme = document.documentElement.getAttribute('data-theme') || 'light';
+                const nextTheme = currentTheme === 'light' ? 'dark' : 'light';
+                applyTheme(nextTheme);
+            });
+        }
+
         const currentPath = window.location.pathname;
         const navLinks = document.querySelectorAll('.sidebar-nav .sidebar-link[href]');
 

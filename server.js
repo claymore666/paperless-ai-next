@@ -16,6 +16,7 @@ process.env.RAG_SERVICE_URL = process.env.RAG_SERVICE_URL || 'http://localhost:8
 process.env.RAG_SERVICE_ENABLED = process.env.RAG_SERVICE_ENABLED || 'true';
 const cors = require('cors');
 const cookieParser = require('cookie-parser');
+const { doubleCsrf } = require('csrf-csrf');
 const rateLimit = require('express-rate-limit');
 const jwt = require('jsonwebtoken');
 const Logger = require('./services/loggerService');
@@ -63,6 +64,10 @@ const retryTracker = new Map();
 
 // Configurable minimum content length (default: 10 characters)
 const MIN_CONTENT_LENGTH = parseInt(process.env.MIN_CONTENT_LENGTH || '10', 10);
+
+function isChatEnabled() {
+  return process.env.RAG_SERVICE_ENABLED === 'true';
+}
 
 
 const corsOptions = {
@@ -127,6 +132,57 @@ app.use(express.json({ limit: '50mb' }));
 app.use(express.urlencoded({ limit: '50mb', extended: true }));
 app.use(express.static(path.join(__dirname, 'public')));
 app.use(cookieParser());
+
+app.use((req, res, next) => {
+  res.locals.appVersion = config.PAPERLESS_AI_VERSION || 'unknown';
+  res.locals.appCommitSha = process.env.PAPERLESS_AI_COMMIT_SHA || 'unknown';
+  next();
+});
+
+// CSRF Protection configuration
+const {
+  invalidCsrfTokenError,
+  generateCsrfToken,
+  doubleCsrfProtection,
+} = doubleCsrf({
+  getSecret: () => JWT_SECRET,
+  getSessionIdentifier: () => "psai-session", // Stable identifier for stateless JWT auth
+  cookieName: "psai.x-csrf-token",
+  cookieOptions: {
+    sameSite: "lax",
+    path: "/",
+    secure: false, // Set to true if using HTTPS
+  },
+  size: 64,
+  ignoredMethods: ["GET", "HEAD", "OPTIONS"],
+  getCsrfTokenFromRequest: (req) => req.headers["x-csrf-token"] || req.body._csrf,
+});
+
+// Middleware to skip CSRF for API Key authenticated requests and provide token to EJS
+app.use((req, res, next) => {
+  const apiKey = req.headers['x-api-key'];
+  const currentApiKey = config.getApiKey();
+  
+  // If API Key is valid, skip CSRF
+  if (currentApiKey && apiKey && apiKey === currentApiKey) {
+    return next();
+  }
+
+  // Handle CSRF protection for other requests
+  doubleCsrfProtection(req, res, (err) => {
+    if (err) {
+      if (err === invalidCsrfTokenError) {
+        return res.status(403).json({ error: "Invalid CSRF token" });
+      }
+      return next(err);
+    }
+    
+    // Make CSRF token available to EJS templates
+    res.locals.csrfToken = generateCsrfToken(req, res);
+    next();
+  });
+});
+
 app.use(['/api', '/chat', '/manual'], apiGlobalLimiter);
 
 // Swagger documentation route (protected)
@@ -586,8 +642,19 @@ if (process.env.RAG_SERVICE_ENABLED === 'true') {
   // RAG UI route
   app.get('/rag', isAuthenticated, async (req, res) => {
     try {
+      let paperlessUrl = '';
+      try {
+        paperlessUrl = await paperlessService.getPublicBaseUrl();
+      } catch (error) {
+        console.warn('[WARN] Unable to resolve Paperless public URL for RAG links:', error.message);
+      }
+
       res.render('rag', { 
-        title: 'Dokumenten-Fragen'
+        title: 'Ask your documents - RAG Interface',
+        version: config.PAPERLESS_AI_VERSION || ' ',
+        paperlessUrl,
+        ragEnabled: true,
+        chatEnabled: isChatEnabled()
       });
     } catch (error) {
       console.error('Error rendering RAG UI:', error);

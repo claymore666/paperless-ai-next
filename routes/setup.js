@@ -679,7 +679,14 @@ router.get('/api/playground/bootstrap', protectApiRoute, async (req, res) => {
  *               $ref: '#/components/schemas/Error'
  */
 router.get('/thumb/:documentId', async (req, res) => {
-  const cachePath = path.join('./public/images', `${req.params.documentId}.png`);
+  const documentId = req.params.documentId;
+
+  // Validate documentId to prevent path traversal
+  if (!/^\d+$/.test(documentId)) {
+    return res.status(400).send('Invalid document ID');
+  }
+
+  const cachePath = path.join('./public/images', `${documentId}.png`);
 
   try {
     // Prüfe ob das Bild bereits im Cache existiert
@@ -1792,6 +1799,22 @@ router.post('/api/settings/reset-local-overrides', isAuthenticated, cacheClearLi
   }
 });
 
+router.post('/api/settings/rag-force-model-redownload', isAuthenticated, cacheClearLimiter, async (req, res) => {
+  try {
+    const result = await RAGService.redownloadModels();
+    res.json({
+      success: true,
+      message: result?.message || 'Model re-download has been started in the background.'
+    });
+  } catch (error) {
+    console.error('[ERROR] triggering RAG model re-download:', error);
+    res.status(500).json({
+      success: false,
+      error: 'Failed to trigger model re-download'
+    });
+  }
+});
+
 router.post('/api/reset-all-documents', isAuthenticated, cacheClearLimiter, async (req, res) => {
   try {
     await documentModel.deleteAllDocuments();
@@ -2659,6 +2682,12 @@ router.get('/setup', async (req, res) => {
 router.get('/manual/preview/:id', async (req, res) => {
   try {
     const documentId = req.params.id;
+    
+    // Validate documentId to prevent path traversal and SSRF
+    if (!/^\d+$/.test(documentId)) {
+      return res.status(400).json({ error: 'Invalid document ID' });
+    }
+
     console.log('Fetching content for document:', documentId);
     
     const response = await fetch(
