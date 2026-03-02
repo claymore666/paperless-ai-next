@@ -136,7 +136,19 @@ class DashboardStatsLoader {
 
     setLoadingState(isLoading) {
         if (this.loadingBlock) {
-            this.loadingBlock.classList.toggle('hidden', !isLoading);
+            if (isLoading) {
+                this.loadingBlock.classList.remove('hidden');
+                requestAnimationFrame(() => {
+                    this.loadingBlock.classList.remove('opacity-0');
+                    this.loadingBlock.classList.add('opacity-100');
+                });
+            } else {
+                this.loadingBlock.classList.remove('opacity-100');
+                this.loadingBlock.classList.add('opacity-0');
+                setTimeout(() => {
+                    this.loadingBlock.classList.add('hidden');
+                }, 300);
+            }
             this.loadingBlock.setAttribute('aria-busy', isLoading ? 'true' : 'false');
         }
 

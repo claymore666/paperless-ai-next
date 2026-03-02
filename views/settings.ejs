@@ -69,6 +69,22 @@
             background-color: var(--token-usage-bg);
             color: var(--text-primary);
         }
+
+        .restart-overlay {
+            background: rgba(15, 23, 42, 0.74);
+            backdrop-filter: blur(6px);
+        }
+
+        .restart-seal {
+            display: inline-block;
+            animation: sealBob 1.4s ease-in-out infinite;
+            transform-origin: center;
+        }
+
+        @keyframes sealBob {
+            0%, 100% { transform: translateY(0px) rotate(-2deg); }
+            50% { transform: translateY(-6px) rotate(2deg); }
+        }
     </style>
 <%- include('partials/shell/head-end') %>
 <%- include('partials/shell/body-open', {
@@ -696,6 +712,9 @@
             </div>
         </main>
     </div>
+
+    <%- include('partials/restart-overlay') %>
+
     <%- include('partials/scripts/settings-scripts') %>
     <script src="js/settings.js"></script>
     <%- include('partials/shell/footer') %>

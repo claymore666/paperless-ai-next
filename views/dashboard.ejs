@@ -8,7 +8,7 @@
     chatEnabled: typeof chatEnabled !== 'undefined' ? chatEnabled : false,
     ragEnabled: typeof ragEnabled !== 'undefined' ? ragEnabled : false
 }) %>
-            <div class="content-wrapper">
+            <div class="content-wrapper relative">
                 <div class="content-header flex items-center justify-between">
                     <h2 class="content-title">Dashboard Overview</h2>
                     <div class="flex items-center gap-4">
@@ -43,12 +43,14 @@
                     </div>
                 </div>
 
-                <div id="dashboardLoadingBlock" class="material-card mb-6" role="status" aria-live="polite" aria-busy="true">
-                    <div class="flex items-center gap-3">
-                        <i class="fas fa-spinner fa-spin text-blue-500 text-xl" aria-hidden="true"></i>
-                        <div>
-                            <div class="font-medium">Loading dashboard data...</div>
-                            <div class="text-sm text-gray-600">Fetching latest statistics and charts.</div>
+                <div id="dashboardLoadingBlock" class="absolute inset-0 z-40 flex items-center justify-center rounded-xl bg-white/80 dark:bg-slate-900/80 backdrop-blur-sm transition-opacity duration-300 opacity-100" role="status" aria-live="polite" aria-busy="true">
+                    <div class="material-card w-full max-w-md">
+                        <div class="flex items-center gap-3">
+                            <i class="fas fa-spinner fa-spin text-blue-500 text-xl" aria-hidden="true"></i>
+                            <div>
+                                <div class="font-medium">Loading dashboard data...</div>
+                                <div class="text-sm text-gray-600">Fetching latest statistics and charts.</div>
+                            </div>
                         </div>
                     </div>
                 </div>
