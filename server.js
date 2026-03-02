@@ -129,6 +129,12 @@ app.use(express.urlencoded({ limit: '50mb', extended: true }));
 app.use(express.static(path.join(__dirname, 'public')));
 app.use(cookieParser());
 
+app.use((req, res, next) => {
+  res.locals.appVersion = config.PAPERLESS_AI_VERSION || 'unknown';
+  res.locals.appCommitSha = process.env.PAPERLESS_AI_COMMIT_SHA || 'unknown';
+  next();
+});
+
 // CSRF Protection configuration
 const {
   invalidCsrfTokenError,

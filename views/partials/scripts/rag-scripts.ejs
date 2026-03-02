@@ -1,29 +1,5 @@
 <script>
-    // CSRF Token handling
-    function getTokenHeaders() {
-        return fetch('/api/csrf-token', { method: 'GET', credentials: 'same-origin' })
-                .then(res => res.ok ? res.json() : { token: '' })
-                .then(data => {
-                    let config = {
-                        headers: new Map()
-                    };
-                    if (data.token) {
-                        const csrfToken = data.token;
-                        if (!config.headers.has('X-CSRF-Token')) {
-                            config.headers.append('X-CSRF-Token', csrfToken);
-                        }
-                    } else {
-                        const csrfToken = document.querySelector('meta[name="csrf-token"]')?.getAttribute('content');
-                        if (!config.headers['X-CSRF-Token'] && !config.headers['x-csrf-token']) {
-                            config.headers['X-CSRF-Token'] = csrfToken;
-                        }
-                    }
-                    return config;
-                });
-    }
-
     // DOM Elements
-    const themeToggle = document.getElementById('themeToggle');
     const statusIndicator = document.getElementById('status-indicator');
     const statusText = document.getElementById('status-text');
     const apiStatus = document.getElementById('api-status');
@@ -71,7 +47,6 @@
     };
 
     // State
-    let darkMode = (localStorage.getItem('theme') || 'light') === 'dark';
     let useAI = localStorage.getItem('useAI') !== 'false';
     let isConnected = false;
     let isReady = false;
@@ -79,7 +54,6 @@
 
     // Initialize
     document.addEventListener('DOMContentLoaded', () => {
-        updateTheme();
         updateAIToggle();
         autoResizeTextarea();
         messageInput.addEventListener('input', autoResizeTextarea);
@@ -93,12 +67,6 @@
                 e.preventDefault();
                 sendMessage();
             }
-        });
-
-        themeToggle.addEventListener('click', () => {
-            darkMode = !darkMode;
-            localStorage.setItem('darkMode', darkMode);
-            updateTheme();
         });
 
         if (aiToggle) {
@@ -189,18 +157,6 @@
 
         setInterval(checkStatus, 10000);
     });
-
-    function updateTheme() {
-        if (darkMode) {
-            document.documentElement.setAttribute('data-theme', 'dark');
-            localStorage.setItem('theme', 'dark');
-            themeToggle.innerHTML = '<i class="fas fa-sun"></i>';
-        } else {
-            document.documentElement.setAttribute('data-theme', 'light');
-            localStorage.setItem('theme', 'light');
-            themeToggle.innerHTML = '<i class="fas fa-moon"></i>';
-        }
-    }
 
     function updateAIToggle() {
         if (!aiToggle) return;

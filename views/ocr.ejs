@@ -1,15 +1,8 @@
 <!-- views/ocr.ejs -->
 <!DOCTYPE html>
 <html lang="en" class="h-full" data-theme="light">
-<head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>OCR Queue - Paperless-AI</title>
-    <link rel="icon" type="image/webp" href="/favicon.webp">
-    <script src="/vendor/tailwind/tailwindcss-3.4.16.js"></script>
-    <link rel="stylesheet" href="/vendor/fontawesome/css/all.min.css">
+<%- include('partials/shell/head-start', { pageTitle: 'OCR Queue - Paperless-AI' }) %>
     <link rel="stylesheet" href="/vendor/datatables/css/jquery.dataTables.min.css">
-    <link rel="stylesheet" href="css/dashboard.css">
     <style>
         .status-badge {
             display: inline-flex;
@@ -85,30 +78,13 @@
             padding: 3rem 2rem;
         }
     </style>
-</head>
-<body class="h-full">
-    <button id="themeToggle" class="theme-toggle">
-        <i class="fas fa-moon dark:fas fa-sun"></i>
-    </button>
+<%- include('partials/shell/head-end') %>
+<%- include('partials/shell/body-open', {
+    version: typeof version !== 'undefined' ? version : '',
+    chatEnabled: typeof chatEnabled !== 'undefined' ? chatEnabled : false,
+    ragEnabled: typeof ragEnabled !== 'undefined' ? ragEnabled : false
+}) %>
 
-    <div class="layout-container">
-        <button id="mobileMenuButton" class="mobile-menu-button">
-            <i class="fas fa-bars"></i>
-        </button>
-        <!-- Sidebar -->
-        <div id="sidebarOverlay" class="sidebar-overlay"></div>
-        <aside class="sidebar">
-            <div class="sidebar-header">
-                <img src="/favicon.webp" class="no-invert" alt="Paperless AI Logo" style="height: 60px;">
-                <h1 class="brand-title"><span class="relative inline-block">Paperless-AI<span class="absolute right-0 top-0 translate-x-1/2 -translate-y-1/2 rotate-12 inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-semibold bg-blue-100 text-blue-700">next</span></span><small style="display: block;"><%= version %></small></h1>
-            </div>
-
-            <nav class="sidebar-nav">
-                <%- include('partials/sidebar-nav', { chatEnabled, ragEnabled }) %>
-            </nav>
-        </aside>
-
-        <main class="main-content">
             <div class="content-wrapper">
                 <div class="content-header flex justify-between items-center mb-6">
                     <div>
@@ -221,7 +197,6 @@ MISTRAL_OCR_MODEL=mistral-ocr-latest</pre>
                 </div>
 
             </div>
-        </main>
     </div>
 
     <!-- Progress Overlay (SSE) -->
@@ -259,5 +234,5 @@ MISTRAL_OCR_MODEL=mistral-ocr-latest</pre>
 
     <%- include('partials/scripts/ocr-scripts') %>
     <script src="/js/ocr.js"></script>
-</body>
-</html>
+    <%- include('partials/shell/footer') %>
+    <%- include('partials/shell/body-close') %>
