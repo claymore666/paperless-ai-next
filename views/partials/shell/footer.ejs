@@ -8,6 +8,8 @@
     const footerCommitSource = routeCommit || globalCommit || 'unknown';
     const footerCommit = String(footerCommitSource).slice(0, 8);
 %>
-<footer class="fixed bottom-2 left-1/2 z-40 -translate-x-1/2 px-3 py-1 text-xs text-gray-400/70 pointer-events-none select-none">
-    <span>Paperless-AI next by <a href="https://admon.me">admonstrator</a> <%= footerVersion %> (build <%= footerCommit %>)</span>
+<footer class="fixed bottom-0 inset-x-0 z-40 border-t border-gray-200/40 bg-white/70 dark:bg-slate-900/70 backdrop-blur-sm">
+    <div class="px-4 py-2 text-center text-xs text-gray-500/90">
+        <span>Paperless-AI next by <a href="https://admon.me" class="hover:underline" target="_blank" rel="noopener noreferrer">admonstrator</a> <%= footerVersion %> (build <%= footerCommit %>)</span>
+    </div>
 </footer>

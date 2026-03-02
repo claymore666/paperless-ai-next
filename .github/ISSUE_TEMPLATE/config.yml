@@ -1,0 +1,8 @@
+blank_issues_enabled: false
+contact_links:
+- name: Documentation
+  url: https://paperless-ai-next.admon.me/
+  about: Read setup, configuration, and feature docs before opening an issue.
+- name: Security Policy
+  url: https://paperless-ai-next.admon.me/security/
+  about: Please report security issues responsibly using the security policy guidance.

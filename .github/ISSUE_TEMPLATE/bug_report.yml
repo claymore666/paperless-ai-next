@@ -1,166 +1,152 @@
-name: "🐞 Bug Report"
-description: "Report a bug or unexpected behavior"
+name: "🐞 Bug report"
+description: "Report a reproducible bug in Paperless-AI next"
 title: "[Bug]: "
 labels: [ "bug", "triage" ]
-assignees:
-- ""
-projects: [ "admonstrator/paperless-ai-next" ]
 
 body:
 - type: markdown
   attributes:
     value: |
-      ## 🐞 Bug Report
-      Thanks for taking the time to report an issue! Please fill in as much detail as possible to help us investigate and fix it.
-
-      **⚠️ IMPORTANT: Issues that are missing required information or do not follow this template will be deleted without notice. Please ensure all required fields are completed.**
+      Thanks for reporting a bug.
+      Please provide enough detail so maintainers can reproduce the issue quickly.
 
 - type: input
-  id: bug_summary
+  id: summary
   attributes:
-    label: "🔍 Bug Summary"
-    description: "Briefly describe the issue."
-    placeholder: "A short, clear summary of the bug..."
+    label: Summary
+    description: One short sentence describing the problem.
+    placeholder: "Example: Dashboard fails to load when opening /dashboard"
   validations:
     required: true
 
 - type: textarea
-  id: bug_description
+  id: steps
   attributes:
-    label: "📖 Description"
-    description: "Provide a detailed description of the bug, including any observations."
-    placeholder: "Explain the issue, expected behavior, and actual behavior."
-  validations:
-    required: true
-
-- type: textarea
-  id: reproduction_steps
-  attributes:
-    label: "🔄 Steps to Reproduce"
-    description: "How do we reproduce the issue?"
+    label: Steps to reproduce
+    description: Provide exact steps in order.
     placeholder: |
-      1. Go to '...'
-      2. Click on '...'
-      3. Scroll down to '...'
-      4. See error
+      1. Go to ...
+      2. Click ...
+      3. Submit ...
+      4. Observe ...
   validations:
     required: true
 
 - type: textarea
-  id: expected_behavior
+  id: expected
   attributes:
-    label: "✅ Expected Behavior"
-    description: "What should happen instead?"
-    placeholder: "Describe the expected outcome."
+    label: Expected behavior
+    placeholder: "What should have happened?"
   validations:
     required: true
 
 - type: textarea
-  id: actual_behavior
+  id: actual
   attributes:
-    label: "❌ Actual Behavior"
-    description: "What actually happens?"
-    placeholder: "Describe what you see instead of the expected behavior."
+    label: Actual behavior
+    placeholder: "What happened instead? Include visible errors."
+  validations:
+    required: true
+
+- type: textarea
+  id: logs
+  attributes:
+    label: Relevant logs
+    description: Paste Paperless-AI next logs (and Paperless-ngx logs if relevant).
+    render: shell
+    placeholder: |
+      docker logs paperless-ai-next-1 --tail=200
+      ...
+  validations:
+    required: true
+
+- type: textarea
+  id: traceback
+  attributes:
+    label: Browser console / stack trace (if applicable)
+    description: Paste JavaScript errors or stack traces.
+    render: shell
+
+- type: input
+  id: app_version
+  attributes:
+    label: Paperless-AI next version
+    description: Version shown in the app/footer or image tag used.
+    placeholder: "e.g. v2026-03-01-04"
   validations:
     required: true
 
 - type: input
-  id: paperless_ai_version
+  id: app_commit
   attributes:
-    label: "🏷️ Paperless-AI next Version"
-    description: "What version of Paperless-AI next are you using? You can find this in your settings or docker-compose file."
-    placeholder: "e.g. v1.2.3, latest, commit hash, etc."
-  validations:
-    required: true
+    label: Paperless-AI next commit
+    description: Commit SHA shown in About/footer (if available).
+    placeholder: "e.g. a1b2c3d4"
 
-- type: textarea
-  id: docker_logs
+- type: input
+  id: paperless_ngx_version
   attributes:
-    label: "📜 Docker Logs"
-    description: "Upload Docker logs (or paste relevant log snippets)."
-    placeholder: "Drag & drop files here or paste logs."
-    render: shell
-  validations:
-    required: true
-
-- type: textarea
-  id: paperless_ngx_logs
-  attributes:
-    label: "📜 Paperless-ngx Logs"
-    description: "Upload Paperless-ngx logs (or paste relevant log snippets)."
-    placeholder: "Drag & drop files here or paste logs."
-    render: shell
-
-- type: textarea
-  id: screenshots
-  attributes:
-    label: "🖼️ Screenshots of your settings page"
-    description: "Attach screenshots of your currenct paperless-ai settings."
-    placeholder: "Drag & drop images or provide a link."
+    label: Paperless-ngx version
+    placeholder: "e.g. 2.14.7"
 
 - type: dropdown
-  id: operating_system
+  id: deployment
   attributes:
-    label: "🖥️ Desktop Environment"
-    description: "Select the OS where the issue occurs."
+    label: Deployment type
     options:
-    - "Windows"
-    - "macOS"
-    - "Linux"
-    - "Other"
+    - Docker Compose
+    - Docker (manual)
+    - Bare metal / Node
+    - Other
+  validations:
+    required: true
+
+- type: dropdown
+  id: os
+  attributes:
+    label: Host OS
+    options:
+    - Linux
+    - macOS
+    - Windows
+    - Other
   validations:
     required: true
 
 - type: input
   id: os_version
   attributes:
-    label: "💻 OS Version"
-    description: "Enter your OS version."
-    placeholder: "e.g. Windows 11, macOS 14, Ubuntu 22.04"
+    label: Host OS version
+    placeholder: "e.g. Ubuntu 24.04"
 
-- type: dropdown
+- type: input
   id: browser
   attributes:
-    label: "🌐 Browser"
-    description: "Which browser are you using (if applicable)?"
-    options:
-    - "Chrome"
-    - "Safari"
-    - "Firefox"
-    - "Edge"
-    - "Other"
+    label: Browser (if UI related)
+    placeholder: "e.g. Chrome 133"
 
-- type: input
-  id: browser_version
+- type: textarea
+  id: config_notes
   attributes:
-    label: "🔢 Browser Version"
-    description: "Enter your browser version (if applicable)."
-    placeholder: "e.g. 120.0.6099.199"
-
-- type: input
-  id: smartphone_browser
-  attributes:
-    label: "🌐 Mobile Browser"
-    description: "Specify the browser you used on mobile (if applicable)."
-    placeholder: "e.g. Safari, Chrome, Firefox"
+    label: Configuration notes
+    description: Share relevant settings only (no secrets).
+    placeholder: |
+      AI_PROVIDER=openai
+      RAG_SERVICE_ENABLED=true
+      MISTRAL_OCR_ENABLED=no
 
 - type: checkboxes
-  id: additional_info
+  id: checks
   attributes:
-    label: "📝 Additional Information"
-    description: "Select any that apply."
+    label: Pre-submission checklist
     options:
-    - label: "I have checked existing issues and this is not a duplicate"
+    - label: I searched existing issues and did not find a duplicate.
       required: true
-    - label: "I have tried debugging this issue on my own"
-    - label: "I can provide a fix and submit a PR"
-    - label: "I am sure that this problem is affecting everyone, not only me"
-    - label: "I have provided all required information above"
+    - label: I removed or masked secrets/tokens from logs and screenshots.
       required: true
 
 - type: textarea
-  id: extra_notes
+  id: extra
   attributes:
-    label: "📌 Extra Notes"
-    description: "Anything else you'd like to add?"
-    placeholder: "Additional comments or findings..."
+    label: Additional context
+    description: Anything else that might help.
