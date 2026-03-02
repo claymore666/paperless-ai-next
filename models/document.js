@@ -10,6 +10,12 @@ if (!fs.existsSync(dataDir)) {
   fs.mkdirSync(dataDir, { recursive: true });
 }
 
+try {
+  fs.accessSync(dataDir, fs.constants.W_OK);
+} catch (error) {
+  throw new Error(`Data directory is not writable: ${dataDir}. Check container volume permissions. Original error: ${error.message}`);
+}
+
 // Initialize database with WAL mode for better performance
 const db = new Database(path.join(dataDir, 'documents.db'), { 
   //verbose: console.log 
