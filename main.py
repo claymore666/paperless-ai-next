@@ -3,7 +3,6 @@ import json
 import logging
 import hashlib
 import numpy as np
-import pickle
 from datetime import datetime
 from typing import List, Dict, Optional, Any, Union, Tuple
 import time
@@ -56,7 +55,7 @@ logger.info(f"Loaded PAPERLESS_API_TOKEN: {'[SET]' if os.getenv('PAPERLESS_API_T
 # Constants
 DOCUMENTS_FILE = "./data/documents.json"
 CHROMADB_DIR = "./data/chromadb"
-BM25_FILE = "./data/bm25_index.pkl"
+BM25_FILE = "./data/bm25_index.json"
 STATE_FILE = "./data/system_state.json"
 EMBEDDING_MODEL_NAME = "paraphrase-multilingual-MiniLM-L12-v2"
 CROSS_ENCODER_MODEL_NAME = "cross-encoder/ms-marco-MiniLM-L-6-v2"
@@ -879,13 +878,12 @@ class SearchEngine:
         os.makedirs(os.path.dirname(BM25_FILE), exist_ok=True)
         
         try:
-            # Save both the BM25 object and the tokenized corpus
-            with open(BM25_FILE, 'wb') as f:
-                pickle.dump({
-                    'bm25': self.bm25,
+            # Save the tokenized corpus as JSON (safer than pickle)
+            with open(BM25_FILE, 'w', encoding='utf-8') as f:
+                json.dump({
                     'tokenized_corpus': self.tokenized_corpus
                 }, f)
-            logger.info(f"Saved BM25 index to {BM25_FILE}")
+            logger.info(f"Saved BM25 tokenized corpus to {BM25_FILE}")
             return True
         except Exception as e:
             logger.error(f"Error saving BM25 index: {str(e)}")
@@ -895,15 +893,16 @@ class SearchEngine:
         """Load BM25 index from disk"""
         logger.info(f"Loading BM25 index from {BM25_FILE}")
         try:
-            with open(BM25_FILE, 'rb') as f:
-                data = pickle.load(f)
+            with open(BM25_FILE, 'r', encoding='utf-8') as f:
+                data = json.load(f)
             
-            self.bm25 = data['bm25']
             self.tokenized_corpus = data['tokenized_corpus']
             
-            # Validate BM25 index
-            if not self.bm25 or not self.tokenized_corpus or len(self.tokenized_corpus) == 0:
-                logger.error("Loaded BM25 index is invalid or empty")
+            # Re-initialize BM25 index from corpus
+            if self.tokenized_corpus and len(self.tokenized_corpus) > 0:
+                self.bm25 = BM25Okapi(self.tokenized_corpus)
+            else:
+                logger.error("Loaded BM25 corpus is invalid or empty")
                 self.bm25_initialized = False
                 global_state.system_status.bm25_ready = False
                 return False
@@ -916,7 +915,7 @@ class SearchEngine:
             self.bm25_initialized = True
             global_state.system_status.bm25_ready = True
             
-            logger.info("BM25 index loaded successfully")
+            logger.info("BM25 index loaded successfully and re-initialized")
             return True
         except Exception as e:
             logger.error(f"Error loading BM25 index: {str(e)}")

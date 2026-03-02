@@ -47,3 +47,5 @@ surya_models.py
 # AI context files (auto-generated)
 COPILOT.md
 .DS_Store
+GEMINI.md
+CVE/*
