@@ -679,7 +679,14 @@ router.get('/api/playground/bootstrap', protectApiRoute, async (req, res) => {
  *               $ref: '#/components/schemas/Error'
  */
 router.get('/thumb/:documentId', async (req, res) => {
-  const cachePath = path.join('./public/images', `${req.params.documentId}.png`);
+  const documentId = req.params.documentId;
+
+  // Validate documentId to prevent path traversal
+  if (!/^\d+$/.test(documentId)) {
+    return res.status(400).send('Invalid document ID');
+  }
+
+  const cachePath = path.join('./public/images', `${documentId}.png`);
 
   try {
     // Prüfe ob das Bild bereits im Cache existiert
