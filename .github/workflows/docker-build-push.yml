@@ -1,5 +1,8 @@
 name: Docker Build and Push
 
+env:
+  DOCKERHUB_REPO: admonstrator/paperless-ai-next
+
 on:
   workflow_dispatch:
     inputs:
@@ -88,10 +91,10 @@ jobs:
 
           \`\`\`bash
           # Lite (~500–700 MB) – AI tagging only
-          docker pull admonstrator/paperless-ai-next:${VERSION_TAG}-lite
+          docker pull ${{ env.DOCKERHUB_REPO }}:${VERSION_TAG}-lite
 
           # Full (~1.5–2 GB) – AI tagging + RAG
-          docker pull admonstrator/paperless-ai-next:${VERSION_TAG}-full
+          docker pull ${{ env.DOCKERHUB_REPO }}:${VERSION_TAG}-full
           \`\`\`
 
           **Full changelog:** https://github.com/Admonstrator/paperless-ai-next/commits/main" \
@@ -108,6 +111,8 @@ jobs:
     needs: [generate-version]
     outputs:
       image-digest: ${{ steps.push.outputs.digest }}
+      base-image: ${{ steps.base.outputs.base_image }}
+      base-digest: ${{ steps.base.outputs.base_digest }}
     
     steps:
       - name: Checkout code
@@ -123,19 +128,30 @@ jobs:
       - name: Log in to Docker Hub
         uses: docker/login-action@v3
         with:
-          username: admonstrator
+          username: ${{ secrets.DOCKER_HUB_USERNAME }}
           password: ${{ secrets.DOCKER_HUB_TOKEN }}
       
       - name: Extract metadata
         id: meta
         uses: docker/metadata-action@v5
         with:
-          images: admonstrator/paperless-ai-next
+          images: ${{ env.DOCKERHUB_REPO }}
           tags: |
             type=raw,value=${{ needs.generate-version.outputs.version_tag }}
             type=raw,value=${{ needs.generate-version.outputs.version_tag }}-lite
             type=raw,value=latest,enable=${{ inputs.also_tag_latest || github.event_name == 'push' }}
             type=raw,value=latest-lite,enable=${{ inputs.also_tag_latest || github.event_name == 'push' }}
+
+      - name: Resolve Lite base digest
+        id: base
+        run: |
+          BASE_IMAGE="${{ env.DOCKERHUB_REPO }}:latest-base-lite"
+          BASE_DIGEST=$(docker buildx imagetools inspect "$BASE_IMAGE" --format '{{.Manifest.Digest}}' || true)
+          if [ -z "$BASE_DIGEST" ]; then
+            BASE_DIGEST="unavailable"
+          fi
+          echo "base_image=$BASE_IMAGE" >> $GITHUB_OUTPUT
+          echo "base_digest=$BASE_DIGEST" >> $GITHUB_OUTPUT
       
       - name: Build and Push Lite Docker image
         id: push
@@ -144,13 +160,14 @@ jobs:
           context: .
           file: ./Dockerfile.lite
           build-args: |
+            BASE_IMAGE=${{ env.DOCKERHUB_REPO }}:latest-base-lite
             PAPERLESS_AI_COMMIT_SHA=${{ needs.generate-version.outputs.commit_sha }}
           push: true
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
           platforms: ${{ inputs.build_arm64 && 'linux/amd64,linux/arm64' || 'linux/amd64' }}
-          cache-from: type=registry,ref=admonstrator/paperless-ai-next:buildcache-lite
-          cache-to: type=registry,ref=admonstrator/paperless-ai-next:buildcache-lite,mode=min
+          cache-from: type=registry,ref=${{ env.DOCKERHUB_REPO }}:buildcache-app-lite
+          cache-to: type=registry,ref=${{ env.DOCKERHUB_REPO }}:buildcache-app-lite,mode=min
         timeout-minutes: 45
 
   # Job 2: Build and Push Full Image (optional)
@@ -161,6 +178,8 @@ jobs:
     if: ${{ inputs.build_full_image }}
     outputs:
       image-digest: ${{ steps.push.outputs.digest }}
+      base-image: ${{ steps.base.outputs.base_image }}
+      base-digest: ${{ steps.base.outputs.base_digest }}
     
     steps:
       - name: Checkout code
@@ -176,17 +195,28 @@ jobs:
       - name: Log in to Docker Hub
         uses: docker/login-action@v3
         with:
-          username: admonstrator
+          username: ${{ secrets.DOCKER_HUB_USERNAME }}
           password: ${{ secrets.DOCKER_HUB_TOKEN }}
       
       - name: Extract metadata
         id: meta
         uses: docker/metadata-action@v5
         with:
-          images: admonstrator/paperless-ai-next
+          images: ${{ env.DOCKERHUB_REPO }}
           tags: |
             type=raw,value=${{ needs.generate-version.outputs.version_tag }}-full
             type=raw,value=latest-full,enable=${{ inputs.also_tag_latest || github.event_name == 'push' }}
+
+      - name: Resolve Full base digest
+        id: base
+        run: |
+          BASE_IMAGE="${{ env.DOCKERHUB_REPO }}:latest-base-full"
+          BASE_DIGEST=$(docker buildx imagetools inspect "$BASE_IMAGE" --format '{{.Manifest.Digest}}' || true)
+          if [ -z "$BASE_DIGEST" ]; then
+            BASE_DIGEST="unavailable"
+          fi
+          echo "base_image=$BASE_IMAGE" >> $GITHUB_OUTPUT
+          echo "base_digest=$BASE_DIGEST" >> $GITHUB_OUTPUT
       
       - name: Build and Push Full Docker image
         id: push
@@ -195,20 +225,21 @@ jobs:
           context: .
           file: ./Dockerfile
           build-args: |
+            BASE_IMAGE=${{ env.DOCKERHUB_REPO }}:latest-base-full
             PAPERLESS_AI_COMMIT_SHA=${{ needs.generate-version.outputs.commit_sha }}
           push: true
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
           platforms: ${{ inputs.build_arm64 && 'linux/amd64,linux/arm64' || 'linux/amd64' }}
-          cache-from: type=registry,ref=admonstrator/paperless-ai-next:buildcache-full
-          cache-to: type=registry,ref=admonstrator/paperless-ai-next:buildcache-full,mode=min
+          cache-from: type=registry,ref=${{ env.DOCKERHUB_REPO }}:buildcache-app-full
+          cache-to: type=registry,ref=${{ env.DOCKERHUB_REPO }}:buildcache-app-full,mode=min
         timeout-minutes: 60
 
   # Job 3: Summary
   summary:
     name: Build Summary
     runs-on: ubuntu-latest
-    needs: [generate-version, build-push-lite]
+    needs: [generate-version, build-push-lite, build-push-full]
     if: always() && needs.generate-version.result == 'success'
     
     steps:
@@ -222,6 +253,15 @@ jobs:
           echo "**Also tagged as latest:** ${{ inputs.also_tag_latest || github.event_name == 'push' }}" >> $GITHUB_STEP_SUMMARY
           echo "**ARM64 enabled:** ${{ inputs.build_arm64 }}" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
+
+          echo "#### 🧱 Base Image Digests" >> $GITHUB_STEP_SUMMARY
+          echo "- **Lite Base:** \`${{ needs.build-push-lite.outputs.base-image }}\`" >> $GITHUB_STEP_SUMMARY
+          echo "- **Lite Base Digest:** \`${{ needs.build-push-lite.outputs.base-digest }}\`" >> $GITHUB_STEP_SUMMARY
+          if [ "${{ inputs.build_full_image }}" = "true" ]; then
+            echo "- **Full Base:** \`${{ needs.build-push-full.outputs.base-image }}\`" >> $GITHUB_STEP_SUMMARY
+            echo "- **Full Base Digest:** \`${{ needs.build-push-full.outputs.base-digest }}\`" >> $GITHUB_STEP_SUMMARY
+          fi
+          echo "" >> $GITHUB_STEP_SUMMARY
           
           echo "#### ✅ Lite Image (Default)" >> $GITHUB_STEP_SUMMARY
           echo "- **Size:** ~500-700 MB" >> $GITHUB_STEP_SUMMARY
@@ -233,7 +273,7 @@ jobs:
           echo "- **Features:** Full AI tagging, no RAG" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
           echo "\`\`\`bash" >> $GITHUB_STEP_SUMMARY
-          echo "docker pull admonstrator/paperless-ai-next:${{ needs.generate-version.outputs.version_tag }}" >> $GITHUB_STEP_SUMMARY
+          echo "docker pull ${{ env.DOCKERHUB_REPO }}:${{ needs.generate-version.outputs.version_tag }}" >> $GITHUB_STEP_SUMMARY
           echo "\`\`\`" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
           
@@ -248,7 +288,7 @@ jobs:
             echo "- **Features:** AI tagging + RAG semantic search" >> $GITHUB_STEP_SUMMARY
             echo "" >> $GITHUB_STEP_SUMMARY
             echo "\`\`\`bash" >> $GITHUB_STEP_SUMMARY
-            echo "docker pull admonstrator/paperless-ai-next:${{ needs.generate-version.outputs.version_tag }}-full" >> $GITHUB_STEP_SUMMARY
+            echo "docker pull ${{ env.DOCKERHUB_REPO }}:${{ needs.generate-version.outputs.version_tag }}-full" >> $GITHUB_STEP_SUMMARY
             echo "\`\`\`" >> $GITHUB_STEP_SUMMARY
           else
             echo "#### ℹ️ Full Image" >> $GITHUB_STEP_SUMMARY
@@ -258,4 +298,4 @@ jobs:
           echo "" >> $GITHUB_STEP_SUMMARY
           echo "---" >> $GITHUB_STEP_SUMMARY
           echo "**Repository:** [Admonstrator/paperless-ai-next](https://github.com/Admonstrator/paperless-ai-next)" >> $GITHUB_STEP_SUMMARY
-          echo "**Docker Hub:** [admonstrator/paperless-ai-next](https://hub.docker.com/r/admonstrator/paperless-ai-next)" >> $GITHUB_STEP_SUMMARY
+          echo "**Docker Hub Repository:** \`${{ env.DOCKERHUB_REPO }}\`" >> $GITHUB_STEP_SUMMARY
