@@ -12,6 +12,10 @@
             border-radius: 9999px;
             font-size: 0.75rem;
             font-weight: 600;
+            white-space: nowrap;
+        }
+        .ocr-header-badges {
+            margin-right: 0.25rem;
         }
         .status-pending   { background: #fef3c7; color: #92400e; }
         .status-processing{ background: #dbeafe; color: #1e40af; }
@@ -86,14 +90,14 @@
 }) %>
 
             <div class="content-wrapper">
-                <div class="content-header flex justify-between items-center mb-6">
-                    <div>
-                        <h1 class="content-title">OCR Queue</h1>
+                <div class="content-header flex justify-between items-center gap-4 mb-6 pr-2">
+                    <div class="min-w-0">
+                        <h1 class="content-title truncate">OCR Queue</h1>
                         <p class="text-sm text-gray-500 mt-1">
                             Documents with missing or insufficient OCR text queued for Mistral OCR reprocessing.
                         </p>
                     </div>
-                    <div class="flex gap-3 items-center flex-wrap">
+                    <div class="flex gap-3 items-center flex-shrink-0 flex-nowrap ocr-header-badges">
                         <!-- Stats badges -->
                         <span id="statPending" class="status-badge status-pending"><i class="fas fa-hourglass-half"></i> <span id="statPendingCount">…</span> pending</span>
                         <span id="statDone" class="status-badge status-done"><i class="fas fa-check"></i> <span id="statDoneCount">…</span> done</span>
