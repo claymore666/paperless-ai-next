@@ -704,7 +704,7 @@ module.exports = {
     }
   },
 
-  async getRecentHistoryDocuments(limit = 6) {
+  async getRecentHistoryDocuments(limit = 4) {
     try {
       const safeLimit = Math.max(1, Math.min(20, Number(limit) || 6));
       return db.prepare(`
