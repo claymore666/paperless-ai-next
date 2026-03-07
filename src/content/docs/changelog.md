@@ -61,7 +61,3 @@ All improvements and fixes included in this fork, compared to clusterzx/paperles
 | NEXT-004 | Upgraded to Node.js 24 LTS | 2025-12-18 |
 | NEXT-002 | Removed unused `sqlite3` dependency | 2025-12-03 |
 | NEXT-001 | Automatic version tagging in CI/CD builds | 2025-12-04 |
-
----
-
-> Fix IDs reference the corresponding detailed documentation entries.
