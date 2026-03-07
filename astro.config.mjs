@@ -178,11 +178,6 @@ if (document.readyState === 'loading') {
             { label: 'Contributing', link: '/contributing/' },
             { label: 'Security Policy', link: '/security/' }
           ]
-        },
-        {
-          label: 'Fixes',
-          collapsed: true,
-          autogenerate: { directory: 'fixes', collapsed: true }
         }
       ]
     })

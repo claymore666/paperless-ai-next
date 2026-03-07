@@ -11,16 +11,6 @@ Instead, use [GitHub Security Advisories](https://github.com/admonstrator/paperl
 
 ---
 
-## Fixed vulnerabilities
-
-| ID | Description | Fixed |
-|----|-------------|-------|
-| SEC-001 | SSRF and code injection through untrusted AI provider URLs and responses | 2025-12-03 |
-| SEC-002 | urllib3 decompression-bomb (CVE-2026-21441) in Python RAG service | 2026-01-09 |
-| SEC-003 | Missing rate limiting on API and streaming endpoints | 2026-02-25 |
-
----
-
 ## Security notes
 
 - Paperless-AI next requires access to your Paperless-ngx API. Use a dedicated API token with the minimum required permissions.
