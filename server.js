@@ -2,6 +2,8 @@ const express = require('express');
 const cron = require('node-cron');
 const path = require('path');
 const fs = require('fs').promises;
+const fsSync = require('fs');
+const crypto = require('crypto');
 const config = require('./config/config');
 const paperlessService = require('./services/paperlessService');
 const AIServiceFactory = require('./services/aiServiceFactory');
@@ -46,7 +48,67 @@ const txtLogger = new Logger({
 
 const app = express();
 let runningTask = false;
-const JWT_SECRET = config.getJwtSecret();
+
+function persistJwtSecret(secret) {
+  const runtimeDataDir = path.join(process.cwd(), 'data');
+  const envFilePath = path.join(runtimeDataDir, '.env');
+  const runtimeOverridesPath = path.join(runtimeDataDir, 'runtime-overrides.json');
+
+  try {
+    fsSync.mkdirSync(runtimeDataDir, { recursive: true });
+
+    let envContent = '';
+    if (fsSync.existsSync(envFilePath)) {
+      envContent = fsSync.readFileSync(envFilePath, 'utf8');
+    }
+
+    const hasJwtSecretLine = /^\s*JWT_SECRET\s*=.*$/m.test(envContent);
+    let updatedEnvContent = envContent;
+
+    if (hasJwtSecretLine) {
+      updatedEnvContent = envContent.replace(/^\s*JWT_SECRET\s*=.*$/m, `JWT_SECRET=${secret}`);
+    } else {
+      const trimmed = envContent.trimEnd();
+      updatedEnvContent = trimmed ? `${trimmed}\nJWT_SECRET=${secret}\n` : `JWT_SECRET=${secret}\n`;
+    }
+
+    fsSync.writeFileSync(envFilePath, updatedEnvContent, 'utf8');
+  } catch (error) {
+    console.warn('[WARN] Could not persist generated JWT_SECRET to data/.env:', error.message);
+  }
+
+  try {
+    if (!fsSync.existsSync(runtimeOverridesPath)) {
+      return;
+    }
+
+    const raw = fsSync.readFileSync(runtimeOverridesPath, 'utf8');
+    const parsed = raw.trim() ? JSON.parse(raw) : {};
+
+    if (!parsed.JWT_SECRET || String(parsed.JWT_SECRET).trim() === '') {
+      parsed.JWT_SECRET = secret;
+      fsSync.writeFileSync(runtimeOverridesPath, JSON.stringify(parsed, null, 2), 'utf8');
+    }
+  } catch (error) {
+    console.warn('[WARN] Could not update JWT_SECRET in runtime-overrides.json:', error.message);
+  }
+}
+
+function ensureJwtSecret() {
+  const existingSecret = config.getJwtSecret();
+  if (existingSecret) {
+    return existingSecret;
+  }
+
+  const generatedSecret = crypto.randomBytes(64).toString('hex');
+  process.env.JWT_SECRET = generatedSecret;
+  persistJwtSecret(generatedSecret);
+
+  console.warn('[WARN] JWT_SECRET was missing. Generated and persisted a new secret. Existing sessions may require re-login.');
+  return generatedSecret;
+}
+
+const JWT_SECRET = ensureJwtSecret();
 
 if (!JWT_SECRET) {
   console.error('JWT_SECRET environment variable is not set. Refusing to start without a secure JWT secret.');
@@ -57,6 +119,36 @@ const trustProxy = config.getTrustProxy();
 if (trustProxy !== false) {
   app.set('trust proxy', trustProxy);
 }
+
+function getCookieSecureMode() {
+  return typeof config.getCookieSecureMode === 'function'
+    ? config.getCookieSecureMode()
+    : String(process.env.COOKIE_SECURE_MODE || 'auto').trim().toLowerCase();
+}
+
+function shouldUseSecureCookies(req) {
+  const mode = getCookieSecureMode();
+
+  if (mode === 'always') {
+    return true;
+  }
+
+  if (mode === 'never') {
+    return false;
+  }
+
+  if (req) {
+    const forwardedProto = String(req.headers['x-forwarded-proto'] || '')
+      .split(',')[0]
+      .trim()
+      .toLowerCase();
+    return Boolean(req.secure || forwardedProto === 'https');
+  }
+
+  return String(process.env.NODE_ENV || '').toLowerCase() === 'production';
+}
+
+const csrfCookieSecure = shouldUseSecureCookies();
 
 // Retry tracking to prevent infinite retry loops
 const retryTracker = new Map();
@@ -177,12 +269,25 @@ const {
   doubleCsrfProtection,
 } = doubleCsrf({
   getSecret: () => JWT_SECRET,
-  getSessionIdentifier: () => "psai-session", // Stable identifier for stateless JWT auth
+  getSessionIdentifier: (req) => {
+    const token = req.cookies?.jwt || req.headers.authorization?.split(' ')[1];
+    if (token) {
+      return `jwt:${token}`;
+    }
+
+    const apiKey = req.headers['x-api-key'];
+    const currentApiKey = config.getApiKey();
+    if (currentApiKey && apiKey && apiKey === currentApiKey) {
+      return `api-key:${apiKey}`;
+    }
+
+    return `ip:${req.ip || 'unknown'}`;
+  },
   cookieName: "psai.x-csrf-token",
   cookieOptions: {
     sameSite: "lax",
     path: "/",
-    secure: false, // Set to true if using HTTPS
+    secure: csrfCookieSecure,
   },
   size: 64,
   ignoredMethods: ["GET", "HEAD", "OPTIONS"],

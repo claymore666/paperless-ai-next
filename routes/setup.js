@@ -16,7 +16,7 @@ const RAGService = require('../services/ragService.js');
 const fs = require('fs').promises;
 const path = require('path');
 const crypto = require('crypto');
-const { validateCustomFieldValue, shouldQueueForOcrOnAiError, classifyOcrQueueReasonFromAiError } = require('../services/serviceUtils');
+const { validateApiUrl, validateCustomFieldValue, shouldQueueForOcrOnAiError, classifyOcrQueueReasonFromAiError } = require('../services/serviceUtils');
 const jwt = require('jsonwebtoken');
 const bcrypt = require('bcryptjs');
 const QRCode = require('qrcode');
@@ -30,6 +30,30 @@ require('dotenv').config({ path: '../data/.env' });
 function isChatEnabled() {
   const ragEnabled = process.env.RAG_SERVICE_ENABLED === 'true';
   return ragEnabled;
+}
+
+function getCookieSecureMode() {
+  return typeof config.getCookieSecureMode === 'function'
+    ? config.getCookieSecureMode()
+    : String(process.env.COOKIE_SECURE_MODE || 'auto').trim().toLowerCase();
+}
+
+function shouldUseSecureCookies(req) {
+  const mode = getCookieSecureMode();
+
+  if (mode === 'always') {
+    return true;
+  }
+
+  if (mode === 'never') {
+    return false;
+  }
+
+  const forwardedProto = String(req.headers['x-forwarded-proto'] || '')
+    .split(',')[0]
+    .trim()
+    .toLowerCase();
+  return Boolean(req.secure || forwardedProto === 'https');
 }
 
 const SETTINGS_SECRET_FIELDS = [
@@ -208,7 +232,8 @@ let PUBLIC_ROUTES = [
   '/health',
   '/login',
   '/logout',
-  '/setup'
+  '/setup',
+  '/api/setup'
 ];
 
 // Combined middleware to check authentication and setup
@@ -586,7 +611,7 @@ router.post('/login', loginLimiter, async (req, res) => {
       );
       res.cookie('jwt', token, {
         httpOnly: true,
-        secure: false,
+        secure: shouldUseSecureCookies(req),
         sameSite: 'lax',
         path: '/',
         maxAge: 24 * 60 * 60 * 1000
@@ -620,7 +645,7 @@ router.post('/login', loginLimiter, async (req, res) => {
         );
         res.cookie(MFA_CHALLENGE_COOKIE, challengeToken, {
           httpOnly: true,
-          secure: false,
+          secure: shouldUseSecureCookies(req),
           sameSite: 'lax',
           path: '/'
         });
@@ -641,7 +666,7 @@ router.post('/login', loginLimiter, async (req, res) => {
       );
       res.cookie('jwt', token, {
         httpOnly: true,
-        secure: false,  
+        secure: shouldUseSecureCookies(req),
         sameSite: 'lax', 
         path: '/',
         maxAge: 24 * 60 * 60 * 1000 
@@ -3023,6 +3048,300 @@ const normalizeArray = (value) => {
   return [];
 };
 
+const SETUP_MFA_CHALLENGE_TTL_MS = 10 * 60 * 1000;
+const setupMfaChallenges = new Map();
+
+const DEFAULT_AI_PROVIDER_PRESETS = [
+  {
+    id: 'openai-default',
+    label: 'OpenAI',
+    provider: 'openai',
+    apiUrl: 'https://api.openai.com/v1',
+    model: 'gpt-4o-mini',
+    tokenPlaceholder: 'sk-...'
+  },
+  {
+    id: 'lmstudio-local',
+    label: 'LM Studio (OpenAI compatible)',
+    provider: 'custom',
+    apiUrl: 'http://127.0.0.1:1234/v1',
+    model: 'qwen2.5-7b-instruct',
+    tokenPlaceholder: 'lm-studio-token'
+  },
+  {
+    id: 'ollama-local',
+    label: 'Ollama',
+    provider: 'ollama',
+    apiUrl: 'http://localhost:11434',
+    model: 'llama3.2',
+    tokenPlaceholder: ''
+  },
+  {
+    id: 'ionos-openai-compatible',
+    label: 'IONOS (OpenAI compatible)',
+    provider: 'custom',
+    apiUrl: 'https://openai.inference.de-txl.ionos.com/v1',
+    model: 'meta-llama/llama-3.3-70b-instruct',
+    tokenPlaceholder: 'ionos-api-key'
+  }
+];
+
+function cleanupExpiredSetupMfaChallenges() {
+  const now = Date.now();
+  for (const [challengeId, challenge] of setupMfaChallenges.entries()) {
+    if (now - challenge.createdAt > SETUP_MFA_CHALLENGE_TTL_MS) {
+      setupMfaChallenges.delete(challengeId);
+    }
+  }
+}
+
+function normalizeSetupBaseUrl(url) {
+  return String(url || '').trim().replace(/\/+$/, '').replace(/\/api$/, '');
+}
+
+function parseBooleanInput(value, defaultValue = false) {
+  if (typeof value === 'boolean') {
+    return value;
+  }
+
+  if (typeof value === 'string') {
+    const normalized = value.trim().toLowerCase();
+    if (['true', '1', 'yes', 'on'].includes(normalized)) {
+      return true;
+    }
+    if (['false', '0', 'no', 'off'].includes(normalized)) {
+      return false;
+    }
+  }
+
+  return defaultValue;
+}
+
+function getSetupUrlValidationOptions() {
+  return {
+    allowPrivateIPs: true,
+    allowLocalhost: parseBooleanInput(process.env.PAPERLESS_AI_SETUP_ALLOW_LOCALHOST, false)
+  };
+}
+
+function normalizeTagListInput(value) {
+  if (!value) {
+    return [];
+  }
+
+  if (Array.isArray(value)) {
+    return value.map((item) => String(item).trim()).filter(Boolean);
+  }
+
+  return String(value)
+    .split(',')
+    .map((item) => item.trim())
+    .filter(Boolean);
+}
+
+function getDefaultScanInterval() {
+  return process.env.SCAN_INTERVAL || '*/30 * * * *';
+}
+
+async function isInitialSetupOpen() {
+  const [isEnvConfigured, users] = await Promise.all([
+    setupService.isConfigured(),
+    documentModel.getUsers()
+  ]);
+
+  const hasUsers = Array.isArray(users) && users.length > 0;
+  return !(isEnvConfigured && hasUsers);
+}
+
+async function ensureSetupOpenOrRespond(res) {
+  const setupOpen = await isInitialSetupOpen();
+  if (!setupOpen) {
+    res.status(403).json({
+      success: false,
+      error: 'Initial setup is already complete.'
+    });
+    return false;
+  }
+
+  return true;
+}
+
+function toEnvPreviewLines(config) {
+  const previewKeys = [
+    'PAPERLESS_API_URL',
+    'PAPERLESS_API_TOKEN',
+    'PAPERLESS_USERNAME',
+    'PROCESS_PREDEFINED_DOCUMENTS',
+    'TAGS',
+    'IGNORE_TAGS',
+    'ADD_AI_PROCESSED_TAG',
+    'AI_PROCESSED_TAG_NAME',
+    'DISABLE_AUTOMATIC_PROCESSING',
+    'SCAN_INTERVAL',
+    'AI_PROVIDER',
+    'OPENAI_API_KEY',
+    'OPENAI_MODEL',
+    'OLLAMA_API_URL',
+    'OLLAMA_MODEL',
+    'CUSTOM_BASE_URL',
+    'CUSTOM_API_KEY',
+    'CUSTOM_MODEL',
+    'AZURE_ENDPOINT',
+    'AZURE_API_KEY',
+    'AZURE_DEPLOYMENT_NAME',
+    'AZURE_API_VERSION',
+    'MISTRAL_OCR_ENABLED',
+    'MISTRAL_API_KEY',
+    'MISTRAL_OCR_MODEL'
+  ];
+
+  return previewKeys
+    .filter((key) => Object.prototype.hasOwnProperty.call(config, key))
+    .map((key) => `${key}=${config[key] == null ? '' : config[key]}`)
+    .join('\n');
+}
+
+async function loadAiProviderPresets() {
+  const presetsPath = path.join(process.cwd(), 'config', 'ai-provider-presets.json');
+
+  try {
+    const raw = await fs.readFile(presetsPath, 'utf8');
+    const parsed = JSON.parse(raw);
+    const source = Array.isArray(parsed) ? parsed : parsed?.presets;
+
+    if (!Array.isArray(source) || source.length === 0) {
+      return DEFAULT_AI_PROVIDER_PRESETS;
+    }
+
+    return source
+      .map((item, index) => ({
+        id: String(item.id || `preset-${index + 1}`),
+        label: String(item.label || item.name || `Preset ${index + 1}`),
+        provider: String(item.provider || 'custom'),
+        apiUrl: String(item.apiUrl || item.baseUrl || ''),
+        model: String(item.model || ''),
+        tokenPlaceholder: String(item.tokenPlaceholder || item.apiKeyPlaceholder || '')
+      }))
+      .filter((item) => ['openai', 'ollama', 'custom', 'azure'].includes(item.provider));
+  } catch (error) {
+    console.warn('[WARN] Could not load AI provider presets from config/ai-provider-presets.json:', error.message);
+    return DEFAULT_AI_PROVIDER_PRESETS;
+  }
+}
+
+async function validatePaperlessConnectionForSetup(paperlessUrl, paperlessToken) {
+  const normalizedUrl = normalizeSetupBaseUrl(paperlessUrl);
+  if (!normalizedUrl || !paperlessToken) {
+    return {
+      success: false,
+      stage: 'input',
+      message: 'Paperless API URL and API token are required.'
+    };
+  }
+
+  const isReachable = await setupService.validatePaperlessConfig(normalizedUrl, paperlessToken);
+  if (!isReachable) {
+    return {
+      success: false,
+      stage: 'reachability',
+      message: 'Paperless-ngx could not be reached with the provided URL and token.'
+    };
+  }
+
+  const permissionResult = await setupService.validateApiPermissions(normalizedUrl, paperlessToken);
+  if (!permissionResult.success) {
+    return {
+      success: false,
+      stage: 'permissions',
+      message: permissionResult.message || 'Paperless-ngx API permissions are insufficient.'
+    };
+  }
+
+  return {
+    success: true,
+    stage: 'ok',
+    message: 'Paperless-ngx connection and permissions are valid.'
+  };
+}
+
+async function validateAiConnectionForSetup({ aiProvider, apiUrl, token, model, azureApiVersion }) {
+  const provider = String(aiProvider || '').trim().toLowerCase();
+  const normalizedApiUrl = String(apiUrl || '').trim();
+  const normalizedToken = String(token || '').trim();
+  const normalizedModel = String(model || '').trim();
+
+  if (!provider || !['openai', 'ollama', 'custom', 'azure'].includes(provider)) {
+    return {
+      success: false,
+      message: 'A valid AI provider is required.'
+    };
+  }
+
+  if (provider === 'openai') {
+    if (!normalizedToken) {
+      return {
+        success: false,
+        message: 'An API token is required for OpenAI.'
+      };
+    }
+
+    const valid = await setupService.validateOpenAIConfig(normalizedToken);
+    return {
+      success: valid,
+      message: valid ? 'OpenAI credentials are valid.' : 'OpenAI test failed. Check token and network access.'
+    };
+  }
+
+  if (provider === 'ollama') {
+    if (!normalizedApiUrl || !normalizedModel) {
+      return {
+        success: false,
+        message: 'API URL and model are required for Ollama.'
+      };
+    }
+
+    const valid = await setupService.validateOllamaConfig(normalizedApiUrl, normalizedModel);
+    return {
+      success: valid,
+      message: valid ? 'Ollama connection is valid.' : 'Ollama test failed. Check URL and model.'
+    };
+  }
+
+  if (provider === 'azure') {
+    if (!normalizedApiUrl || !normalizedToken || !normalizedModel) {
+      return {
+        success: false,
+        message: 'Endpoint, token, and deployment/model are required for Azure.'
+      };
+    }
+
+    const valid = await setupService.validateAzureConfig(
+      normalizedToken,
+      normalizedApiUrl,
+      normalizedModel,
+      azureApiVersion || '2023-05-15'
+    );
+
+    return {
+      success: valid,
+      message: valid ? 'Azure connection is valid.' : 'Azure test failed. Check endpoint, token, deployment, and API version.'
+    };
+  }
+
+  if (!normalizedApiUrl || !normalizedModel) {
+    return {
+      success: false,
+      message: 'API URL and model are required for custom providers.'
+    };
+  }
+
+  const valid = await setupService.validateCustomConfig(normalizedApiUrl, normalizedToken, normalizedModel);
+  return {
+    success: valid,
+    message: valid ? 'Custom provider connection is valid.' : 'Custom provider test failed. Check URL, optional token, and model.'
+  };
+}
+
 /**
  * @swagger
  * /setup:
@@ -3094,7 +3413,10 @@ router.get('/setup', async (req, res) => {
       AZURE_ENDPOINT: process.env.AZURE_ENDPOINT|| '',
       AZURE_API_KEY: process.env.AZURE_API_KEY || '',
       AZURE_DEPLOYMENT_NAME: process.env.AZURE_DEPLOYMENT_NAME || '',
-      AZURE_API_VERSION: process.env.AZURE_API_VERSION || ''
+      AZURE_API_VERSION: process.env.AZURE_API_VERSION || '',
+      MISTRAL_OCR_ENABLED: process.env.MISTRAL_OCR_ENABLED || 'no',
+      MISTRAL_API_KEY: process.env.MISTRAL_API_KEY || '',
+      MISTRAL_OCR_MODEL: process.env.MISTRAL_OCR_MODEL || 'mistral-ocr-latest'
     };
 
     // Check both configuration and users
@@ -3102,6 +3424,7 @@ router.get('/setup', async (req, res) => {
       setupService.isConfigured(),
       documentModel.getUsers()
     ]);
+    const aiProviderPresets = await loadAiProviderPresets();
 
     // Load saved config if it exists
     if (isEnvConfigured) {
@@ -3143,13 +3466,541 @@ router.get('/setup', async (req, res) => {
     // Render setup page with config and appropriate message
     res.render('setup', {
       config,
-      success: successMessage
+      success: successMessage,
+      aiProviderPresets,
+      defaults: {
+        scanInterval: getDefaultScanInterval()
+      }
     });
   } catch (error) {
     console.error('Setup route error:', error);
+    const aiProviderPresets = await loadAiProviderPresets();
     res.status(500).render('setup', {
       config: {},
-      error: 'An error occurred while loading the setup page.'
+      error: 'An error occurred while loading the setup page.',
+      aiProviderPresets,
+      defaults: {
+        scanInterval: getDefaultScanInterval()
+      }
+    });
+  }
+});
+
+/**
+ * @swagger
+ * /api/setup/presets:
+ *   get:
+ *     summary: Get AI provider presets for initial setup
+ *     tags:
+ *       - Setup
+ *     responses:
+ *       200:
+ *         description: Preset list loaded successfully
+ */
+router.get('/api/setup/presets', async (_req, res) => {
+  try {
+    if (!(await ensureSetupOpenOrRespond(res))) {
+      return;
+    }
+
+    const presets = await loadAiProviderPresets();
+    return res.json({
+      success: true,
+      presets
+    });
+  } catch (error) {
+    console.error('[ERROR] GET /api/setup/presets:', error);
+    return res.status(500).json({
+      success: false,
+      error: 'Could not load AI provider presets.'
+    });
+  }
+});
+
+/**
+ * @swagger
+ * /api/setup/mfa/setup:
+ *   post:
+ *     summary: Start setup MFA provisioning
+ *     tags:
+ *       - Setup
+ *     responses:
+ *       200:
+ *         description: MFA provisioning data generated
+ */
+router.post('/api/setup/mfa/setup', express.json(), async (req, res) => {
+  try {
+    if (!(await ensureSetupOpenOrRespond(res))) {
+      return;
+    }
+
+    cleanupExpiredSetupMfaChallenges();
+
+    const username = String(req.body?.username || '').trim();
+    if (!username) {
+      return res.status(400).json({
+        success: false,
+        error: 'Username is required for MFA setup.'
+      });
+    }
+
+    const secret = generateBase32Secret();
+    const otpauthUri = buildOtpAuthUri(secret, username);
+    const qrDataUrl = await QRCode.toDataURL(otpauthUri, {
+      errorCorrectionLevel: 'M',
+      margin: 1,
+      width: 220,
+      color: { dark: '#0f172a', light: '#ffffff' }
+    });
+
+    const challengeId = crypto.randomBytes(24).toString('hex');
+    setupMfaChallenges.set(challengeId, {
+      username,
+      secret,
+      verified: false,
+      createdAt: Date.now()
+    });
+
+    return res.json({
+      success: true,
+      challengeId,
+      secret,
+      otpauthUri,
+      qrDataUrl,
+      expiresInSeconds: Math.floor(SETUP_MFA_CHALLENGE_TTL_MS / 1000)
+    });
+  } catch (error) {
+    console.error('[ERROR] POST /api/setup/mfa/setup:', error);
+    return res.status(500).json({
+      success: false,
+      error: 'Failed to initialize MFA setup.'
+    });
+  }
+});
+
+/**
+ * @swagger
+ * /api/setup/mfa/confirm:
+ *   post:
+ *     summary: Confirm setup MFA code
+ *     tags:
+ *       - Setup
+ *     responses:
+ *       200:
+ *         description: MFA code validated
+ */
+router.post('/api/setup/mfa/confirm', express.json(), async (req, res) => {
+  try {
+    if (!(await ensureSetupOpenOrRespond(res))) {
+      return;
+    }
+
+    cleanupExpiredSetupMfaChallenges();
+
+    const challengeId = String(req.body?.challengeId || '').trim();
+    const token = String(req.body?.token || '').trim();
+
+    if (!challengeId || !token) {
+      return res.status(400).json({
+        success: false,
+        error: 'Challenge ID and authentication code are required.'
+      });
+    }
+
+    const challenge = setupMfaChallenges.get(challengeId);
+    if (!challenge) {
+      return res.status(400).json({
+        success: false,
+        error: 'MFA setup session expired. Start setup again.'
+      });
+    }
+
+    if (!verifyTotpToken(challenge.secret, token)) {
+      return res.status(400).json({
+        success: false,
+        error: 'Invalid authentication code. Please try again.'
+      });
+    }
+
+    challenge.verified = true;
+    challenge.verifiedAt = Date.now();
+
+    return res.json({
+      success: true,
+      message: 'MFA code validated.'
+    });
+  } catch (error) {
+    console.error('[ERROR] POST /api/setup/mfa/confirm:', error);
+    return res.status(500).json({
+      success: false,
+      error: 'Failed to validate MFA code.'
+    });
+  }
+});
+
+/**
+ * @swagger
+ * /api/setup/paperless/test:
+ *   post:
+ *     summary: Test Paperless-ngx connectivity and permissions during setup
+ *     tags:
+ *       - Setup
+ *     responses:
+ *       200:
+ *         description: Connectivity result returned
+ */
+router.post('/api/setup/paperless/test', express.json(), async (req, res) => {
+  try {
+    if (!(await ensureSetupOpenOrRespond(res))) {
+      return;
+    }
+
+    const paperlessUrl = String(req.body?.paperlessUrl || '').trim();
+    const paperlessToken = String(req.body?.paperlessToken || '').trim();
+    const validation = await validatePaperlessConnectionForSetup(paperlessUrl, paperlessToken);
+
+    return res.json(validation);
+  } catch (error) {
+    console.error('[ERROR] POST /api/setup/paperless/test:', error);
+    return res.status(500).json({
+      success: false,
+      error: 'Could not test Paperless-ngx connection.'
+    });
+  }
+});
+
+/**
+ * @swagger
+ * /api/setup/paperless/metadata:
+ *   post:
+ *     summary: Fetch Paperless-ngx counts and tags for setup wizard
+ *     tags:
+ *       - Setup
+ *     responses:
+ *       200:
+ *         description: Metadata loaded successfully
+ */
+router.post('/api/setup/paperless/metadata', express.json(), async (req, res) => {
+  try {
+    if (!(await ensureSetupOpenOrRespond(res))) {
+      return;
+    }
+
+    const paperlessUrl = String(req.body?.paperlessUrl || '').trim();
+    const paperlessToken = String(req.body?.paperlessToken || '').trim();
+    const normalizedUrl = normalizeSetupBaseUrl(paperlessUrl);
+
+    if (!normalizedUrl || !paperlessToken) {
+      return res.status(400).json({
+        success: false,
+        error: 'Paperless API URL and API token are required.'
+      });
+    }
+
+    const urlValidation = validateApiUrl(normalizedUrl, getSetupUrlValidationOptions());
+    if (!urlValidation.valid) {
+      return res.status(400).json({
+        success: false,
+        error: `Invalid Paperless API URL: ${urlValidation.error}`
+      });
+    }
+
+    const initialized = await paperlessService.initializeWithCredentials(`${normalizedUrl}/api`, paperlessToken);
+    if (!initialized) {
+      return res.status(400).json({
+        success: false,
+        error: 'Failed to initialize Paperless-ngx client.'
+      });
+    }
+
+    const [documentCount, correspondentCount, tagCount, tags] = await Promise.all([
+      paperlessService.getDocumentCount(),
+      paperlessService.getCorrespondentCount(),
+      paperlessService.getTagCount(),
+      paperlessService.getTags()
+    ]);
+
+    const tagNames = Array.from(
+      new Set(
+        (Array.isArray(tags) ? tags : [])
+          .map((tag) => String(tag?.name || '').trim())
+          .filter(Boolean)
+      )
+    ).sort((a, b) => a.localeCompare(b));
+
+    return res.json({
+      success: true,
+      metadata: {
+        documents: Number(documentCount || 0),
+        correspondents: Number(correspondentCount || 0),
+        tags: Number(tagCount || 0)
+      },
+      tagNames
+    });
+  } catch (error) {
+    console.error('[ERROR] POST /api/setup/paperless/metadata:', error);
+    return res.status(500).json({
+      success: false,
+      error: 'Could not load Paperless metadata.'
+    });
+  }
+});
+
+/**
+ * @swagger
+ * /api/setup/ai/test:
+ *   post:
+ *     summary: Test AI provider credentials during setup
+ *     tags:
+ *       - Setup
+ *     responses:
+ *       200:
+ *         description: AI connectivity result returned
+ */
+router.post('/api/setup/ai/test', express.json(), async (req, res) => {
+  try {
+    if (!(await ensureSetupOpenOrRespond(res))) {
+      return;
+    }
+
+    const validation = await validateAiConnectionForSetup({
+      aiProvider: req.body?.aiProvider,
+      apiUrl: req.body?.apiUrl,
+      token: req.body?.token,
+      model: req.body?.model,
+      azureApiVersion: req.body?.azureApiVersion
+    });
+
+    return res.json(validation);
+  } catch (error) {
+    console.error('[ERROR] POST /api/setup/ai/test:', error);
+    return res.status(500).json({
+      success: false,
+      error: 'Could not test AI connection.'
+    });
+  }
+});
+
+/**
+ * @swagger
+ * /api/setup/complete:
+ *   post:
+ *     summary: Finalize initial setup, persist env config, and trigger restart
+ *     tags:
+ *       - Setup
+ *     responses:
+ *       200:
+ *         description: Setup completed successfully
+ */
+router.post('/api/setup/complete', express.json(), async (req, res) => {
+  try {
+    if (!(await ensureSetupOpenOrRespond(res))) {
+      return;
+    }
+
+    cleanupExpiredSetupMfaChallenges();
+
+    const adminUsername = String(req.body?.adminUsername || '').trim();
+    const adminPassword = String(req.body?.adminPassword || '');
+    const enableMfa = parseBooleanInput(req.body?.enableMfa, false);
+    const mfaChallengeId = String(req.body?.mfaChallengeId || '').trim();
+
+    const paperlessUrl = normalizeSetupBaseUrl(req.body?.paperlessUrl);
+    const paperlessUsername = String(req.body?.paperlessUsername || '').trim();
+    const paperlessToken = String(req.body?.paperlessToken || '').trim();
+
+    const scanAllDocuments = parseBooleanInput(req.body?.scanAllDocuments, false);
+    const includeTag = String(req.body?.includeTag || '').trim();
+    const excludeTags = normalizeTagListInput(req.body?.excludeTags);
+    const processedTag = String(req.body?.processedTag || '').trim();
+    const automaticScanEnabled = parseBooleanInput(req.body?.automaticScanEnabled, true);
+    const scanInterval = String(req.body?.scanInterval || getDefaultScanInterval()).trim() || getDefaultScanInterval();
+
+    const aiProvider = String(req.body?.aiProvider || '').trim().toLowerCase();
+    const aiApiUrl = String(req.body?.aiApiUrl || '').trim();
+    const aiToken = String(req.body?.aiToken || '').trim();
+    const aiModel = String(req.body?.aiModel || '').trim();
+    const aiAzureApiVersion = String(req.body?.aiAzureApiVersion || '2023-05-15').trim() || '2023-05-15';
+
+    const allowFailedPaperlessTest = parseBooleanInput(req.body?.allowFailedPaperlessTest, false);
+    const allowFailedAiTest = parseBooleanInput(req.body?.allowFailedAiTest, false);
+
+    const mistralOcrEnabled = parseBooleanInput(req.body?.mistralOcrEnabled, false);
+    const mistralApiKey = String(req.body?.mistralApiKey || '').trim();
+    const mistralOcrModel = String(req.body?.mistralOcrModel || 'mistral-ocr-latest').trim() || 'mistral-ocr-latest';
+
+    if (!adminUsername || !adminPassword) {
+      return res.status(400).json({
+        success: false,
+        error: 'Admin username and password are required.'
+      });
+    }
+
+    if (adminPassword.length < 8) {
+      return res.status(400).json({
+        success: false,
+        error: 'Password must be at least 8 characters long.'
+      });
+    }
+
+    if (!paperlessUrl || !paperlessUsername || !paperlessToken) {
+      return res.status(400).json({
+        success: false,
+        error: 'Paperless URL, username, and token are required.'
+      });
+    }
+
+    if (!scanAllDocuments && !includeTag) {
+      return res.status(400).json({
+        success: false,
+        error: 'Select a tag for scanned documents or enable scanning all documents.'
+      });
+    }
+
+    if (!aiProvider || !['openai', 'ollama', 'custom', 'azure'].includes(aiProvider)) {
+      return res.status(400).json({
+        success: false,
+        error: 'A valid AI provider is required.'
+      });
+    }
+
+    const paperlessValidation = await validatePaperlessConnectionForSetup(paperlessUrl, paperlessToken);
+    if (!paperlessValidation.success && !allowFailedPaperlessTest) {
+      return res.status(400).json({
+        success: false,
+        error: paperlessValidation.message
+      });
+    }
+
+    const aiValidation = await validateAiConnectionForSetup({
+      aiProvider,
+      apiUrl: aiApiUrl,
+      token: aiToken,
+      model: aiModel,
+      azureApiVersion: aiAzureApiVersion
+    });
+
+    if (!aiValidation.success && !allowFailedAiTest) {
+      return res.status(400).json({
+        success: false,
+        error: aiValidation.message
+      });
+    }
+
+    const tagsForProcessing = scanAllDocuments ? [] : [includeTag];
+    const apiToken = process.env.API_KEY || crypto.randomBytes(64).toString('hex');
+    const jwtToken = process.env.JWT_SECRET || crypto.randomBytes(64).toString('hex');
+
+    const finalConfig = {
+      PAPERLESS_API_URL: `${paperlessUrl}/api`,
+      PAPERLESS_API_TOKEN: paperlessToken,
+      PAPERLESS_USERNAME: paperlessUsername,
+      AI_PROVIDER: aiProvider,
+      SCAN_INTERVAL: scanInterval,
+      PROCESS_PREDEFINED_DOCUMENTS: scanAllDocuments ? 'no' : 'yes',
+      TAGS: tagsForProcessing,
+      IGNORE_TAGS: excludeTags,
+      ADD_AI_PROCESSED_TAG: processedTag ? 'yes' : 'no',
+      AI_PROCESSED_TAG_NAME: processedTag || 'ai-processed',
+      DISABLE_AUTOMATIC_PROCESSING: automaticScanEnabled ? 'no' : 'yes',
+      TOKEN_LIMIT: process.env.TOKEN_LIMIT || 128000,
+      RESPONSE_TOKENS: process.env.RESPONSE_TOKENS || 1000,
+      USE_PROMPT_TAGS: process.env.USE_PROMPT_TAGS || 'no',
+      PROMPT_TAGS: normalizeArray(process.env.PROMPT_TAGS),
+      USE_EXISTING_DATA: process.env.USE_EXISTING_DATA || 'no',
+      API_KEY: apiToken,
+      JWT_SECRET: jwtToken,
+      PAPERLESS_AI_INITIAL_SETUP: 'yes',
+      ACTIVATE_TAGGING: process.env.ACTIVATE_TAGGING || 'yes',
+      ACTIVATE_CORRESPONDENTS: process.env.ACTIVATE_CORRESPONDENTS || 'yes',
+      ACTIVATE_DOCUMENT_TYPE: process.env.ACTIVATE_DOCUMENT_TYPE || 'yes',
+      ACTIVATE_TITLE: process.env.ACTIVATE_TITLE || 'yes',
+      ACTIVATE_CUSTOM_FIELDS: process.env.ACTIVATE_CUSTOM_FIELDS || 'yes',
+      CUSTOM_FIELDS: process.env.CUSTOM_FIELDS || '{"custom_fields":[]}',
+      MISTRAL_OCR_ENABLED: mistralOcrEnabled ? 'yes' : 'no',
+      MISTRAL_API_KEY: mistralApiKey,
+      MISTRAL_OCR_MODEL: mistralOcrModel
+    };
+
+    if (aiProvider === 'openai') {
+      finalConfig.OPENAI_API_KEY = aiToken;
+      finalConfig.OPENAI_MODEL = aiModel || 'gpt-4o-mini';
+    } else if (aiProvider === 'ollama') {
+      finalConfig.OLLAMA_API_URL = aiApiUrl || 'http://localhost:11434';
+      finalConfig.OLLAMA_MODEL = aiModel || 'llama3.2';
+    } else if (aiProvider === 'azure') {
+      finalConfig.AZURE_ENDPOINT = aiApiUrl;
+      finalConfig.AZURE_API_KEY = aiToken;
+      finalConfig.AZURE_DEPLOYMENT_NAME = aiModel;
+      finalConfig.AZURE_API_VERSION = aiAzureApiVersion;
+    } else {
+      finalConfig.CUSTOM_BASE_URL = aiApiUrl;
+      finalConfig.CUSTOM_API_KEY = aiToken;
+      finalConfig.CUSTOM_MODEL = aiModel;
+    }
+
+    let mfaSecretToPersist = null;
+    if (enableMfa) {
+      if (!mfaChallengeId) {
+        return res.status(400).json({
+          success: false,
+          error: 'MFA setup is incomplete. Generate and confirm a code first.'
+        });
+      }
+
+      const challenge = setupMfaChallenges.get(mfaChallengeId);
+      if (!challenge || !challenge.verified) {
+        return res.status(400).json({
+          success: false,
+          error: 'MFA setup is incomplete or expired. Please repeat MFA setup.'
+        });
+      }
+
+      if (challenge.username !== adminUsername) {
+        return res.status(400).json({
+          success: false,
+          error: 'MFA setup username does not match the admin username.'
+        });
+      }
+
+      mfaSecretToPersist = challenge.secret;
+    }
+
+    await setupService.saveConfig(finalConfig, {
+      skipValidation: allowFailedPaperlessTest || allowFailedAiTest
+    });
+
+    const hashedPassword = await bcrypt.hash(adminPassword, 15);
+    await documentModel.addUser(adminUsername, hashedPassword);
+
+    if (enableMfa && mfaSecretToPersist) {
+      await documentModel.setUserMfaSettings(adminUsername, true, mfaSecretToPersist);
+      setupMfaChallenges.delete(mfaChallengeId);
+    }
+
+    const envPreview = toEnvPreviewLines(finalConfig);
+
+    // Enforce a fresh login after setup completion.
+    res.clearCookie('jwt');
+    res.clearCookie(MFA_CHALLENGE_COOKIE);
+    res.clearCookie(MFA_SETUP_COOKIE);
+
+    res.json({
+      success: true,
+      message: 'Initial setup completed successfully.',
+      restart: true,
+      redirectTo: '/login',
+      envPreview
+    });
+
+    setTimeout(() => {
+      process.exit(0);
+    }, 5000);
+  } catch (error) {
+    console.error('[ERROR] POST /api/setup/complete:', error);
+    return res.status(500).json({
+      success: false,
+      error: 'Failed to complete setup: ' + error.message
     });
   }
 });
@@ -4107,6 +4958,7 @@ router.get('/settings', async (req, res) => {
     GLOBAL_RATE_LIMIT_WINDOW_MS: process.env.GLOBAL_RATE_LIMIT_WINDOW_MS || '900000',
     GLOBAL_RATE_LIMIT_MAX: process.env.GLOBAL_RATE_LIMIT_MAX || '1000',
     TRUST_PROXY: typeof process.env.TRUST_PROXY === 'undefined' ? '' : process.env.TRUST_PROXY,
+    COOKIE_SECURE_MODE: process.env.COOKIE_SECURE_MODE || 'auto',
     MIN_CONTENT_LENGTH: process.env.MIN_CONTENT_LENGTH || '10',
     PAPERLESS_AI_PORT: process.env.PAPERLESS_AI_PORT || '3000'
   };
@@ -4293,7 +5145,7 @@ router.post('/api/settings/mfa/setup', isAuthenticated, express.json(), async (r
 
     res.cookie(MFA_SETUP_COOKIE, setupToken, {
       httpOnly: true,
-      secure: false,
+      secure: shouldUseSecureCookies(req),
       sameSite: 'lax',
       path: '/'
     });
@@ -5221,412 +6073,6 @@ router.get('/health', async (req, res) => {
 
 /**
  * @swagger
- * /setup:
- *   post:
- *     summary: Submit initial application setup configuration
- *     description: |
- *       Configures the initial setup of the Paperless-AI next application, including connections
- *       to Paperless-ngx, AI provider settings, processing parameters, and user authentication.
- *       
- *       This endpoint is primarily used during the first-time setup of the application and
- *       creates the necessary configuration files and database tables.
- *     tags:
- *       - System
- *       - Setup
- *     requestBody:
- *       required: true
- *       content:
- *         application/json:
- *           schema:
- *             type: object
- *             required:
- *               - paperlessUrl
- *               - paperlessToken
- *               - aiProvider
- *               - username
- *               - password
- *             properties:
- *               paperlessUrl:
- *                 type: string
- *                 description: URL of the Paperless-ngx instance
- *                 example: "https://paperless.example.com"
- *               paperlessToken:
- *                 type: string
- *                 description: API token for Paperless-ngx access
- *                 example: "abc123def456"
- *               paperlessUsername:
- *                 type: string
- *                 description: Username for Paperless-ngx (alternative to token authentication)
- *                 example: "admin"
- *               aiProvider:
- *                 type: string
- *                 description: Selected AI provider for document analysis
- *                 enum: ["openai", "ollama", "custom", "azure"]
- *                 example: "openai"
- *               openaiKey:
- *                 type: string
- *                 description: API key for OpenAI (required when aiProvider is 'openai')
- *                 example: "sk-abc123def456"
- *               openaiModel:
- *                 type: string
- *                 description: OpenAI model to use for analysis
- *                 example: "gpt-4"
- *               ollamaUrl:
- *                 type: string
- *                 description: URL for Ollama API (required when aiProvider is 'ollama')
- *                 example: "http://localhost:11434"
- *               ollamaModel:
- *                 type: string
- *                 description: Ollama model to use for analysis
- *                 example: "llama2"
- *               customApiKey:
- *                 type: string
- *                 description: API key for custom LLM provider
- *                 example: "api-key-123"
- *               customBaseUrl:
- *                 type: string
- *                 description: Base URL for custom LLM provider
- *                 example: "https://api.customllm.com"
- *               customModel:
- *                 type: string
- *                 description: Model name for custom LLM provider
- *                 example: "custom-model"
- *               scanInterval:
- *                 type: number
- *                 description: Interval in minutes for scanning new documents
- *                 example: 15
- *               systemPrompt:
- *                 type: string
- *                 description: Custom system prompt for document analysis
- *                 example: "Extract key information from the following document..."
- *               showTags:
- *                 type: boolean
- *                 description: Whether to show tags in the UI
- *                 example: true
- *               tags:
- *                 type: string
- *                 description: Comma-separated list of tags to use for filtering
- *                 example: "Invoice,Receipt,Contract"
- *               aiProcessedTag:
- *                 type: boolean
- *                 description: Whether to add a tag for AI-processed documents
- *                 example: true
- *               aiTagName:
- *                 type: string
- *                 description: Tag name to use for AI-processed documents
- *                 example: "AI-Processed"
- *               usePromptTags:
- *                 type: boolean
- *                 description: Whether to use tags in prompts
- *                 example: true
- *               promptTags:
- *                 type: string
- *                 description: Comma-separated list of tags to use in prompts
- *                 example: "Invoice,Receipt"
- *               username:
- *                 type: string
- *                 description: Admin username for Paperless-AI
- *                 example: "admin"
- *               password:
- *                 type: string
- *                 description: Admin password for Paperless-AI
- *                 example: "securepassword"
- *               useExistingData:
- *                 type: boolean
- *                 description: Whether to use existing data from a previous setup
- *                 example: false
- *               activateTagging:
- *                 type: boolean
- *                 description: Enable AI-based tag suggestions
- *                 example: true
- *               activateCorrespondents:
- *                 type: boolean
- *                 description: Enable AI-based correspondent suggestions
- *                 example: true
- *               activateDocumentType:
- *                 type: boolean
- *                 description: Enable AI-based document type suggestions
- *                 example: true
- *               activateTitle:
- *                 type: boolean
- *                 description: Enable AI-based title suggestions
- *                 example: true
- *               activateCustomFields:
- *                 type: boolean
- *                 description: Enable AI-based custom field extraction
- *                 example: false
- *     responses:
- *       200:
- *         description: Setup completed successfully
- *         content:
- *           application/json:
- *             schema:
- *               type: object
- *               properties:
- *                 status:
- *                   type: string
- *                   enum: ["success"]
- *                   example: "success"
- *                 message:
- *                   type: string
- *                   example: "Configuration saved successfully"
- *       400:
- *         description: Invalid configuration parameters
- *         content:
- *           application/json:
- *             schema:
- *               type: object
- *               properties:
- *                 status:
- *                   type: string
- *                   enum: ["error"]
- *                   example: "error"
- *                 message:
- *                   type: string
- *                   example: "Missing required configuration parameters"
- *       500:
- *         description: Server error during setup
- *         content:
- *           application/json:
- *             schema:
- *               type: object
- *               properties:
- *                 status:
- *                   type: string
- *                   enum: ["error"]
- *                   example: "error"
- *                 message:
- *                   type: string
- *                   example: "Failed to save configuration: Database error"
- */
-router.post('/setup', express.json(), async (req, res) => {
-  try {
-    const { 
-      paperlessUrl, 
-      paperlessToken,
-      paperlessUsername,
-      aiProvider,
-      openaiKey,
-      openaiModel,
-      ollamaUrl,
-      ollamaModel,
-      scanInterval,
-      systemPrompt,
-      showTags,
-      tokenLimit,
-      responseTokens,
-      tags,
-      ignoreTags,
-      aiProcessedTag,
-      aiTagName,
-      usePromptTags,
-      promptTags,
-      username,
-      password,
-      useExistingData,
-      customApiKey,
-      customBaseUrl,
-      customModel,
-      activateTagging,
-      activateCorrespondents,
-      activateDocumentType,
-      activateTitle,
-      activateCustomFields,
-      customFields,
-      disableAutomaticProcessing,
-      azureEndpoint,
-      azureApiKey,
-      azureDeploymentName,
-      azureApiVersion
-    } = req.body;
-
-    // Log setup request with sensitive data redacted
-    const sensitiveKeys = ['paperlessToken', 'openaiKey', 'customApiKey', 'password', 'confirmPassword'];
-    const redactedBody = Object.fromEntries(
-      Object.entries(req.body).map(([key, value]) => [
-      key,
-      sensitiveKeys.includes(key) ? '******' : value
-      ])
-    );
-    console.log('Setup request received:', redactedBody);
-
-
-    // Initialize paperlessService with the new credentials
-    const paperlessApiUrl = paperlessUrl + '/api';
-    const initSuccess = await paperlessService.initializeWithCredentials(paperlessApiUrl, paperlessToken);
-    
-    if (!initSuccess) {
-      return res.status(400).json({ 
-        error: 'Failed to initialize connection to Paperless-ngx. Please check URL and Token.'
-      });
-    }
-
-    // Validate Paperless credentials
-    const isPaperlessValid = await setupService.validatePaperlessConfig(paperlessUrl, paperlessToken);
-    if (!isPaperlessValid) {
-      return res.status(400).json({ 
-        error: 'Paperless-ngx connection failed. Please check URL and Token.'
-      });
-    }
-
-    const isPermissionValid = await setupService.validateApiPermissions(paperlessUrl, paperlessToken);
-    if (!isPermissionValid.success) {
-      return res.status(400).json({
-        error: 'Paperless-ngx API permissions are insufficient. Error: ' + isPermissionValid.message
-      });
-    }
-
-    const normalizeArray = (value) => {
-      if (!value) return [];
-      if (Array.isArray(value)) return value;
-      if (typeof value === 'string') return value.split(',').filter(Boolean).map(item => item.trim());
-      return [];
-    };
-
-    // Process custom fields if enabled
-    let processedCustomFields = [];
-    if (customFields && activateCustomFields) {
-      try {
-        const parsedFields = typeof customFields === 'string' 
-          ? JSON.parse(customFields) 
-          : customFields;
-        
-        for (const field of parsedFields.custom_fields) {
-          try {
-            const createdField = await paperlessService.createCustomFieldSafely(
-              field.value,
-              field.data_type,
-              field.currency
-            );
-            
-            if (createdField) {
-              processedCustomFields.push({
-                value: field.value,
-                data_type: field.data_type,
-                ...(field.currency && { currency: field.currency })
-              });
-              console.log(`[SUCCESS] Created/found custom field: ${field.value}`);
-            }
-          } catch (fieldError) {
-            console.error(`[WARNING] Error creating custom field ${field.value}:`, fieldError);
-          }
-        }
-      } catch (error) {
-        console.error('[ERROR] Error processing custom fields:', error);
-      }
-    }
-
-    // Generate tokens if not provided in environment
-    const apiToken = process.env.API_KEY || require('crypto').randomBytes(64).toString('hex');
-    const jwtToken = process.env.JWT_SECRET || require('crypto').randomBytes(64).toString('hex');
-
-    const processedPrompt = systemPrompt 
-      ? systemPrompt.replace(/\r\n/g, '\n').replace(/\n/g, '\\n').replace(/=/g, '')
-      : '';
-
-    // Prepare base config
-    const config = {
-      PAPERLESS_API_URL: paperlessApiUrl,
-      PAPERLESS_API_TOKEN: paperlessToken,
-      PAPERLESS_USERNAME: paperlessUsername,
-      AI_PROVIDER: aiProvider,
-      SCAN_INTERVAL: scanInterval || '*/30 * * * *',
-      SYSTEM_PROMPT: processedPrompt,
-      PROCESS_PREDEFINED_DOCUMENTS: showTags || 'no',
-      TOKEN_LIMIT: tokenLimit || 128000,
-      RESPONSE_TOKENS: responseTokens || 1000,
-      TAGS: normalizeArray(tags),
-      IGNORE_TAGS: normalizeArray(ignoreTags),
-      ADD_AI_PROCESSED_TAG: aiProcessedTag || 'no',
-      AI_PROCESSED_TAG_NAME: aiTagName || 'ai-processed',
-      USE_PROMPT_TAGS: usePromptTags || 'no',
-      PROMPT_TAGS: normalizeArray(promptTags),
-      USE_EXISTING_DATA: useExistingData || 'no',
-      API_KEY: apiToken,
-      JWT_SECRET: jwtToken,
-      CUSTOM_API_KEY: customApiKey || '',
-      CUSTOM_BASE_URL: customBaseUrl || '',
-      CUSTOM_MODEL: customModel || '',
-      PAPERLESS_AI_INITIAL_SETUP: 'yes',
-      ACTIVATE_TAGGING: activateTagging ? 'yes' : 'no',
-      ACTIVATE_CORRESPONDENTS: activateCorrespondents ? 'yes' : 'no',
-      ACTIVATE_DOCUMENT_TYPE: activateDocumentType ? 'yes' : 'no',
-      ACTIVATE_TITLE: activateTitle ? 'yes' : 'no',
-      ACTIVATE_CUSTOM_FIELDS: activateCustomFields ? 'yes' : 'no',
-      CUSTOM_FIELDS: processedCustomFields.length > 0 
-        ? JSON.stringify({ custom_fields: processedCustomFields }) 
-        : '{"custom_fields":[]}',
-      DISABLE_AUTOMATIC_PROCESSING: disableAutomaticProcessing ? 'yes' : 'no',
-      AZURE_ENDPOINT: azureEndpoint || '',
-      AZURE_API_KEY: azureApiKey || '',
-      AZURE_DEPLOYMENT_NAME: azureDeploymentName || '',
-      AZURE_API_VERSION: azureApiVersion || ''
-    };
-    
-    // Validate AI provider config
-    if (aiProvider === 'openai') {
-      const isOpenAIValid = await setupService.validateOpenAIConfig(openaiKey);
-      if (!isOpenAIValid) {
-        return res.status(400).json({ 
-          error: 'OpenAI API Key is not valid. Please check the key.'
-        });
-      }
-      config.OPENAI_API_KEY = openaiKey;
-      config.OPENAI_MODEL = openaiModel || 'gpt-4o-mini';
-    } else if (aiProvider === 'ollama') {
-      const isOllamaValid = await setupService.validateOllamaConfig(ollamaUrl, ollamaModel);
-      if (!isOllamaValid) {
-        return res.status(400).json({ 
-          error: 'Ollama connection failed. Please check URL and Model.'
-        });
-      }
-      config.OLLAMA_API_URL = ollamaUrl || 'http://localhost:11434';
-      config.OLLAMA_MODEL = ollamaModel || 'llama3.2';
-    } else if (aiProvider === 'custom') {
-      const isCustomValid = await setupService.validateCustomConfig(customBaseUrl, customApiKey, customModel);
-      if (!isCustomValid) {
-        return res.status(400).json({
-          error: 'Custom connection failed. Please check URL, API Key and Model.'
-        });
-      }
-      config.CUSTOM_BASE_URL = customBaseUrl;
-      config.CUSTOM_API_KEY = customApiKey;
-      config.CUSTOM_MODEL = customModel;
-    } else if (aiProvider === 'azure') {
-      const isAzureValid = await setupService.validateAzureConfig(azureApiKey, azureEndpoint, azureDeploymentName, azureApiVersion);
-      if (!isAzureValid) {
-        return res.status(400).json({
-          error: 'Azure connection failed. Please check URL, API Key, Deployment Name and API Version.'
-        });
-      }
-    }
-
-    // Save configuration
-    await setupService.saveConfig(config);
-    const hashedPassword = await bcrypt.hash(password, 15);
-    await documentModel.addUser(username, hashedPassword);
-
-    res.json({ 
-      success: true,
-      message: 'Configuration saved successfully.',
-      restart: true
-    });
-
-    // Trigger application restart
-    setTimeout(() => {
-      process.exit(0);
-    }, 5000);
-
-  } catch (error) {
-    console.error('[ERROR] Setup error:', error);
-    res.status(500).json({ 
-      error: 'An error occurred: ' + error.message
-    });
-  }
-});
-
-/**
- * @swagger
  * /settings:
  *   post:
  *     summary: Update application settings
@@ -5857,6 +6303,7 @@ router.post('/settings', express.json(), async (req, res) => {
       globalRateLimitWindowMs,
       globalRateLimitMax,
       trustProxy,
+      cookieSecureMode,
       minContentLength,
       paperlessAiPort,
       externalApiAllowPrivateIps
@@ -5925,6 +6372,7 @@ router.post('/settings', express.json(), async (req, res) => {
       GLOBAL_RATE_LIMIT_WINDOW_MS: process.env.GLOBAL_RATE_LIMIT_WINDOW_MS || '900000',
       GLOBAL_RATE_LIMIT_MAX: process.env.GLOBAL_RATE_LIMIT_MAX || '1000',
       TRUST_PROXY: typeof process.env.TRUST_PROXY === 'undefined' ? '' : process.env.TRUST_PROXY,
+      COOKIE_SECURE_MODE: process.env.COOKIE_SECURE_MODE || 'auto',
       MIN_CONTENT_LENGTH: process.env.MIN_CONTENT_LENGTH || '10',
       PAPERLESS_AI_PORT: process.env.PAPERLESS_AI_PORT || '3000'
     };
@@ -6125,6 +6573,16 @@ router.post('/settings', express.json(), async (req, res) => {
       if (globalRateLimitWindowMs) updatedConfig.GLOBAL_RATE_LIMIT_WINDOW_MS = globalRateLimitWindowMs;
       if (globalRateLimitMax) updatedConfig.GLOBAL_RATE_LIMIT_MAX = globalRateLimitMax;
       if (typeof trustProxy === 'string') updatedConfig.TRUST_PROXY = trustProxy.trim();
+      if (typeof cookieSecureMode === 'string') {
+        const normalizedCookieSecureMode = cookieSecureMode.trim().toLowerCase();
+        if (['auto', 'always', 'never'].includes(normalizedCookieSecureMode)) {
+          updatedConfig.COOKIE_SECURE_MODE = normalizedCookieSecureMode;
+        } else {
+          return res.status(400).json({
+            error: 'Invalid Cookie Secure Mode. Allowed values: auto, always, never.'
+          });
+        }
+      }
       if (minContentLength) updatedConfig.MIN_CONTENT_LENGTH = minContentLength;
       if (paperlessAiPort) updatedConfig.PAPERLESS_AI_PORT = paperlessAiPort;
 
