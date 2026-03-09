@@ -1,41 +1,47 @@
 # Third-Party Notices
 
-Dieses Repository enthält lokal vendorte Frontend-Assets unter `public/vendor/`.
+This repository includes vendored frontend assets under public/vendor.
 
-## Überblick (vendorte Assets)
+## Frontend and Vendor Assets
 
-- `@fortawesome/fontawesome-free` `6.7.2` — `CC-BY-4.0`, `OFL-1.1`, `MIT`
-- `@popperjs/core` `2.11.8` — `MIT`
-- `alpinejs` `3.13.5` — `MIT`
-- `chart.js` `3.7.0` — `MIT`
-- `datatables.net` `1.13.7` — `MIT`
-- `datatables.net-dt` `1.13.7` — `MIT`
-- `highlight.js` `11.9.0` — `BSD-3-Clause`
-- `jquery` `3.7.1` — `MIT`
-- `jquery-jsonview` `1.2.3` — `MIT`
-- `marked` `9.1.6` — `MIT`
-- `shepherd.js` `10.0.1` — `MIT`
-- `sortablejs` `1.15.6` — `MIT`
-- `sweetalert2` `11.22.4` — `MIT`
-- `tippy.js` `6.3.7` — `MIT`
+| Package | Version | License |
+| --- | --- | --- |
+| @fortawesome/fontawesome-free | 6.7.2 | CC-BY-4.0 AND OFL-1.1 AND MIT |
+| @popperjs/core | 2.11.8 | MIT |
+| alpinejs | 3.15.8 | MIT |
+| chart.js | 3.9.1 | MIT |
+| datatables.net | 1.13.11 | MIT |
+| datatables.net-dt | 1.13.11 | MIT |
+| date-fns | 4.1.0 | MIT |
+| highlight.js | 11.11.1 | BSD-3-Clause |
+| jquery | 3.7.1 | MIT |
+| jquery-jsonview | 1.2.3 | MIT |
+| marked | 9.1.6 | MIT |
+| qrcode | 1.5.4 | MIT |
+| shepherd.js | 10.0.1 | MIT |
+| sortablejs | 1.15.7 | MIT |
+| sweetalert2 | 11.26.21 | MIT |
+| tippy.js | 6.3.7 | MIT |
 
-## Besondere Hinweise
+## Special Notes
 
-### Font Awesome Free (`@fortawesome/fontawesome-free`)
+### Font Awesome Free
 
-- Verwendete Komponenten stehen unter gemischter Lizenz:
-  - Icons: CC BY 4.0
-  - Fonts: SIL OFL 1.1
-  - Code/CSS: MIT
-- Offizielle Lizenzseite: <https://fontawesome.com/license/free>
+Font Awesome Free is distributed under a composite license:
+- Icons: CC BY 4.0
+- Fonts: SIL OFL 1.1
+- Code and CSS: MIT
 
-### Highlight.js (`highlight.js`)
+Official license information: https://fontawesome.com/license/free
 
-- Lizenz: BSD-3-Clause
-- Lizenztext und Copyright im Projektpaket von `highlight.js` enthalten.
+### Highlight.js
 
-## Quelle der Pakete
+highlight.js is licensed under BSD-3-Clause.
 
-Die vendorten Dateien wurden aus den entsprechenden npm-Paketen übernommen, die in `package.json` und `package-lock.json` dokumentiert sind.
+## Source of Version and License Data
 
-Bei einem Versionsupdate der Vendor-Dateien müssen die Einträge in dieser Datei entsprechend aktualisiert werden.
+The versions and license strings in this document are synchronized with package-lock.json.
+
+## Maintenance
+
+When vendor assets or related dependencies are updated, this file must be updated in the same change.
