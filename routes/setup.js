@@ -64,6 +64,148 @@ const SETTINGS_SECRET_FIELDS = [
   'MISTRAL_API_KEY'
 ];
 
+const THUMBNAIL_CACHE_DIR = path.join('.', 'public', 'images');
+
+function formatBytes(bytes) {
+  const units = ['B', 'KB', 'MB', 'GB', 'TB'];
+  const safeBytes = Number.isFinite(bytes) && bytes > 0 ? bytes : 0;
+  if (safeBytes === 0) {
+    return '0 B';
+  }
+
+  const unitIndex = Math.min(Math.floor(Math.log(safeBytes) / Math.log(1024)), units.length - 1);
+  const value = safeBytes / (1024 ** unitIndex);
+  const decimals = unitIndex === 0 ? 0 : 2;
+  return `${value.toFixed(decimals)} ${units[unitIndex]}`;
+}
+
+async function getThumbnailCacheStats() {
+  try {
+    const entries = await fs.readdir(THUMBNAIL_CACHE_DIR, { withFileTypes: true });
+    let fileCount = 0;
+    let totalBytes = 0;
+
+    for (const entry of entries) {
+      if (!entry.isFile()) {
+        continue;
+      }
+
+      if (!/^\d+\.png$/i.test(entry.name)) {
+        continue;
+      }
+
+      const filePath = path.join(THUMBNAIL_CACHE_DIR, entry.name);
+      try {
+        const stat = await fs.stat(filePath);
+        totalBytes += stat.size;
+        fileCount += 1;
+      } catch (statError) {
+        console.warn(`[WARN] Failed to read thumbnail cache file stats for ${filePath}:`, statError.message);
+      }
+    }
+
+    return {
+      fileCount,
+      totalBytes,
+      totalSizeHuman: formatBytes(totalBytes)
+    };
+  } catch (error) {
+    if (error.code === 'ENOENT') {
+      return {
+        fileCount: 0,
+        totalBytes: 0,
+        totalSizeHuman: '0 B'
+      };
+    }
+    throw error;
+  }
+}
+
+async function clearThumbnailCache() {
+  try {
+    const entries = await fs.readdir(THUMBNAIL_CACHE_DIR, { withFileTypes: true });
+    let removedFiles = 0;
+    let freedBytes = 0;
+
+    for (const entry of entries) {
+      if (!entry.isFile() || !/^\d+\.png$/i.test(entry.name)) {
+        continue;
+      }
+
+      const filePath = path.join(THUMBNAIL_CACHE_DIR, entry.name);
+      let fileSize = 0;
+
+      try {
+        const stat = await fs.stat(filePath);
+        fileSize = stat.size;
+      } catch (statError) {
+        if (statError.code !== 'ENOENT') {
+          console.warn(`[WARN] Failed to stat thumbnail file before delete ${filePath}:`, statError.message);
+        }
+      }
+
+      try {
+        await fs.unlink(filePath);
+        removedFiles += 1;
+        freedBytes += fileSize;
+      } catch (unlinkError) {
+        if (unlinkError.code !== 'ENOENT') {
+          console.warn(`[WARN] Failed to delete thumbnail cache file ${filePath}:`, unlinkError.message);
+        }
+      }
+    }
+
+    return {
+      removedFiles,
+      freedBytes,
+      freedSizeHuman: formatBytes(freedBytes)
+    };
+  } catch (error) {
+    if (error.code === 'ENOENT') {
+      return {
+        removedFiles: 0,
+        freedBytes: 0,
+        freedSizeHuman: '0 B'
+      };
+    }
+    throw error;
+  }
+}
+
+async function removeThumbnailCacheForDocumentIds(ids) {
+  if (!Array.isArray(ids) || ids.length === 0) {
+    return { removedFiles: 0, removedIds: [] };
+  }
+
+  const normalizedIds = ids
+    .map((id) => String(id).trim())
+    .filter((id) => /^\d+$/.test(id));
+
+  if (normalizedIds.length === 0) {
+    return { removedFiles: 0, removedIds: [] };
+  }
+
+  let removedFiles = 0;
+  const removedIds = [];
+
+  await fs.mkdir(THUMBNAIL_CACHE_DIR, { recursive: true });
+
+  for (const id of normalizedIds) {
+    const thumbnailPath = path.join(THUMBNAIL_CACHE_DIR, `${id}.png`);
+    try {
+      await fs.unlink(thumbnailPath);
+      removedFiles += 1;
+      removedIds.push(id);
+    } catch (error) {
+      if (error.code !== 'ENOENT') {
+        console.warn(`[WARN] Failed to delete cached thumbnail ${thumbnailPath}:`, error.message);
+      }
+    }
+  }
+
+  return { removedFiles, removedIds };
+}
+
 /**
  * Rate limiter for cache clearing operations
  * Prevents abuse of cache invalidation endpoints by limiting requests to 10 per 15 minutes per IP
@@ -2297,6 +2439,120 @@ router.post('/api/settings/clear-tag-cache', isAuthenticated, cacheClearLimiter,
 
 /**
  * @swagger
+ * /api/settings/thumbnail-cache:
+ *   get:
+ *     summary: Get thumbnail cache statistics
+ *     description: Returns current thumbnail cache count and total size from local cache storage.
+ *     tags:
+ *       - Settings
+ *     security:
+ *       - BearerAuth: []
+ *       - ApiKeyAuth: []
+ *     responses:
+ *       200:
+ *         description: Thumbnail cache stats retrieved successfully
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 success:
+ *                   type: boolean
+ *                 data:
+ *                   type: object
+ *                   properties:
+ *                     fileCount:
+ *                       type: integer
+ *                     totalBytes:
+ *                       type: integer
+ *                     totalSizeHuman:
+ *                       type: string
+ *       500:
+ *         description: Server error
+ */
+router.get('/api/settings/thumbnail-cache', isAuthenticated, async (req, res) => {
+  try {
+    const stats = await getThumbnailCacheStats();
+    return res.json({
+      success: true,
+      data: stats
+    });
+  } catch (error) {
+    console.error('[ERROR] reading thumbnail cache stats:', error);
+    return res.status(500).json({
+      success: false,
+      error: 'Failed to read thumbnail cache stats'
+    });
+  }
+});
+
+/**
+ * @swagger
+ * /api/settings/thumbnail-cache/clear:
+ *   post:
+ *     summary: Clear thumbnail cache
+ *     description: Deletes all cached thumbnail PNG files from local cache storage and returns cleanup stats.
+ *     tags:
+ *       - Settings
+ *     security:
+ *       - BearerAuth: []
+ *       - ApiKeyAuth: []
+ *     responses:
+ *       200:
+ *         description: Thumbnail cache cleared successfully
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 success:
+ *                   type: boolean
+ *                 message:
+ *                   type: string
+ *                 removedFiles:
+ *                   type: integer
+ *                 freedBytes:
+ *                   type: integer
+ *                 freedSizeHuman:
+ *                   type: string
+ *                 remaining:
+ *                   type: object
+ *                   properties:
+ *                     fileCount:
+ *                       type: integer
+ *                     totalBytes:
+ *                       type: integer
+ *                     totalSizeHuman:
+ *                       type: string
+ *       429:
+ *         description: Too many requests - rate limit exceeded
+ *       500:
+ *         description: Server error
+ */
+router.post('/api/settings/thumbnail-cache/clear', isAuthenticated, cacheClearLimiter, async (req, res) => {
+  try {
+    const cleanup = await clearThumbnailCache();
+    const remaining = await getThumbnailCacheStats();
+
+    return res.json({
+      success: true,
+      message: `Thumbnail cache cleared. Removed ${cleanup.removedFiles} files (${cleanup.freedSizeHuman}).`,
+      removedFiles: cleanup.removedFiles,
+      freedBytes: cleanup.freedBytes,
+      freedSizeHuman: cleanup.freedSizeHuman,
+      remaining
+    });
+  } catch (error) {
+    console.error('[ERROR] clearing thumbnail cache:', error);
+    return res.status(500).json({
+      success: false,
+      error: 'Failed to clear thumbnail cache'
+    });
+  }
+});
+
+/**
+ * @swagger
  * /api/settings/reset-local-overrides:
  *   post:
  *     summary: Reset local runtime overrides
@@ -2481,6 +2737,7 @@ router.post('/api/reset-documents', cacheClearLimiter, isAuthenticated, async (r
     }
 
     await documentModel.deleteDocumentsIdList(ids);
+    await removeThumbnailCacheForDocumentIds(ids);
     res.json({ success: true });
   }
   catch (error) {
@@ -2613,12 +2870,22 @@ router.get('/api/history/validate', isAuthenticated, async (req, res) => {
  *       - ApiKeyAuth: []
  *     responses:
  *       200:
- *         description: Scan initiated successfully
+ *         description: Scan trigger processed successfully
  *         content:
- *           text/plain:
+ *           application/json:
  *             schema:
- *               type: string
- *               example: "Task completed"
+ *               type: object
+ *               properties:
+ *                 success:
+ *                   type: boolean
+ *                 started:
+ *                   type: boolean
+ *                 running:
+ *                   type: boolean
+ *                 stopRequested:
+ *                   type: boolean
+ *                 message:
+ *                   type: string
  *       401:
  *         description: Unauthorized - authentication required
  *         content:
@@ -2631,6 +2898,8 @@ router.get('/api/history/validate', isAuthenticated, async (req, res) => {
  *                   example: "Authentication required"
  *       500:
  *         description: Server error
+ *       503:
+ *         description: Scan control not ready
  *         content:
  *           application/json:
  *             schema:
@@ -2640,59 +2909,106 @@ router.get('/api/history/validate', isAuthenticated, async (req, res) => {
  *                   type: string
  *                   example: "Error during document scan"
  */
-router.post('/api/scan/now', async (req, res) => {
-try {
+router.post('/api/scan/now', isAuthenticated, async (req, res) => {
+  try {
     const isConfigured = await setupService.isConfigured();
     if (!isConfigured) {
-      console.log(`Setup not completed. Visit http://your-machine-ip:${process.env.PAPERLESS_AI_PORT || 3000}/setup to complete setup.`);
-      return;
+      return res.status(400).json({
+        success: false,
+        error: 'Setup not completed'
+      });
     }
 
     const userId = await paperlessService.getOwnUserID();
     if (!userId) {
-      console.error('Failed to get own user ID. Abort scanning.');
-      return;
+      return res.status(500).json({
+        success: false,
+        error: 'Failed to resolve Paperless user ID'
+      });
     }
-    
-      try {
-        let [existingTags, documents, ownUserId, existingCorrespondentList, existingDocumentTypes] = await Promise.all([
-          paperlessService.getTags(),
-          paperlessService.getAllDocuments(),
-          paperlessService.getOwnUserID(),
-          paperlessService.listCorrespondentsNames(),
-          paperlessService.listDocumentTypesNames()
-        ]);
-    
-        //get existing correspondent list
-        existingCorrespondentList = existingCorrespondentList.map(correspondent => correspondent.name);
-        
-        //get existing document types list
-        let existingDocumentTypesList = existingDocumentTypes.map(docType => docType.name);
-        
-        // Extract tag names from tag objects
-        const existingTagNames = existingTags.map(tag => tag.name);
-    
-        for (const doc of documents) {
-          try {
-            const result = await processDocument(doc, existingTagNames, existingCorrespondentList, existingDocumentTypesList, ownUserId);
-            if (!result) continue;
-    
-            const { analysis, originalData } = result;
-            const updateData = await buildUpdateData(analysis, doc);
-            await saveDocumentChanges(doc.id, updateData, analysis, originalData);
-          } catch (error) {
-            console.error(`[ERROR] processing document ${doc.id}:`, error);
-          }
-        }
-      } catch (error) {
-        console.error('[ERROR]  during document scan:', error);
-      } finally {
-        runningTask = false;
-        console.log('[INFO] Task completed');
-        res.send('Task completed');
-      }
+
+    const triggerScanNow = global.__paperlessAiTriggerScanNow;
+    if (typeof triggerScanNow !== 'function') {
+      return res.status(503).json({
+        success: false,
+        error: 'Scan control is not available yet. Please try again in a moment.'
+      });
+    }
+
+    const result = await triggerScanNow('api-manual');
+    return res.json({
+      success: true,
+      ...result
+    });
   } catch (error) {
-    console.error('[ERROR] in startScanning:', error);
+    console.error('[ERROR] /api/scan/now:', error);
+    return res.status(500).json({
+      success: false,
+      error: 'Error during document scan trigger'
+    });
+  }
+});
+
+/**
+ * @swagger
+ * /api/scan/stop:
+ *   post:
+ *     summary: Request graceful stop for active scan
+ *     description: |
+ *       Requests a graceful stop of the currently running scan.
+ *       The current document is allowed to finish processing before the scan exits.
+ *     tags:
+ *       - Documents
+ *       - API
+ *     security:
+ *       - BearerAuth: []
+ *       - ApiKeyAuth: []
+ *     responses:
+ *       200:
+ *         description: Stop request processed
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 success:
+ *                   type: boolean
+ *                 running:
+ *                   type: boolean
+ *                 stopRequested:
+ *                   type: boolean
+ *                 message:
+ *                   type: string
+ *       401:
+ *         description: Unauthorized - authentication required
+ */
+router.post('/api/scan/stop', isAuthenticated, async (req, res) => {
+  try {
+    const requestScanStop = global.__paperlessAiRequestScanStop;
+    const scanState = global.__paperlessAiScanControl || { running: false, stopRequested: false };
+
+    if (typeof requestScanStop !== 'function') {
+      return res.status(503).json({
+        success: false,
+        error: 'Scan control is not available yet. Please try again in a moment.'
+      });
+    }
+
+    const requested = requestScanStop();
+    return res.json({
+      success: true,
+      running: Boolean(scanState.running),
+      stopRequested: Boolean(scanState.stopRequested),
+      message: requested
+        ? 'Stop requested. The current document will finish before scan stops.'
+        : 'No active scan to stop.'
+    });
+  } catch (error) {
+    console.error('[ERROR] /api/scan/stop:', error);
+    return res.status(500).json({
+      success: false,
+      error: 'Error while requesting scan stop'
+    });
   }
 });
 
@@ -6680,15 +6996,19 @@ router.post('/settings', express.json(), async (req, res) => {
  *                   type: boolean
  *                   description: Whether documents are currently being processed
  *                   example: true
- *                 queueLength:
- *                   type: integer
- *                   description: Number of documents waiting in the processing queue
- *                   example: 5
- *                 currentDocument:
+ *                 isScanning:
+ *                   type: boolean
+ *                   description: Whether a scan loop is currently running
+ *                   example: true
+ *                 stopRequested:
+ *                   type: boolean
+ *                   description: Whether a graceful stop has been requested
+ *                   example: false
+ *                 currentlyProcessing:
  *                   type: object
  *                   description: Details about the document currently being processed (if any)
  *                   properties:
- *                     id:
+ *                     documentId:
  *                       type: integer
  *                       description: Document ID
  *                       example: 123
@@ -6721,10 +7041,15 @@ router.post('/settings', express.json(), async (req, res) => {
  *                   type: string
  *                   example: "Failed to fetch processing status"
  */
-router.get('/api/processing-status', async (req, res) => {
+router.get('/api/processing-status', isAuthenticated, async (req, res) => {
   try {
       const status = await documentModel.getCurrentProcessingStatus();
-      res.json(status);
+      const scanState = global.__paperlessAiScanControl || {};
+      res.json({
+        ...status,
+        isScanning: Boolean(scanState.running),
+        stopRequested: Boolean(scanState.stopRequested)
+      });
   } catch (error) {
       res.status(500).json({ error: 'Failed to fetch processing status' });
   }

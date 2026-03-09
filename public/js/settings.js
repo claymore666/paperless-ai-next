@@ -499,6 +499,63 @@ function initializeFormHandlers() {
 
     const delay = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
+    function formatBytes(bytes) {
+        const units = ['B', 'KB', 'MB', 'GB', 'TB'];
+        const safeBytes = Number.isFinite(bytes) && bytes > 0 ? bytes : 0;
+        if (safeBytes === 0) {
+            return '0 B';
+        }
+
+        const unitIndex = Math.min(Math.floor(Math.log(safeBytes) / Math.log(1024)), units.length - 1);
+        const value = safeBytes / (1024 ** unitIndex);
+        return `${value.toFixed(unitIndex === 0 ? 0 : 2)} ${units[unitIndex]}`;
+    }
+
+    function renderThumbnailCacheStats(stats) {
+        const fileCountEl = document.getElementById('thumbnailCacheFileCount');
+        const totalSizeEl = document.getElementById('thumbnailCacheTotalSize');
+
+        if (!fileCountEl || !totalSizeEl) {
+            return;
+        }
+
+        const count = Number(stats?.fileCount || 0);
+        const bytes = Number(stats?.totalBytes || 0);
+        fileCountEl.textContent = String(count);
+        totalSizeEl.textContent = stats?.totalSizeHuman || formatBytes(bytes);
+    }
+
+    async function refreshThumbnailCacheStats() {
+        const refreshBtn = document.getElementById('refreshThumbnailCacheStatsBtn');
+
+        try {
+            if (refreshBtn) {
+                refreshBtn.disabled = true;
+            }
+
+            const response = await fetch('/api/settings/thumbnail-cache', {
+                method: 'GET',
+                headers: {
+                    'Content-Type': 'application/json'
+                }
+            });
+
+            const result = await response.json();
+            if (!response.ok || !result.success) {
+                throw new Error(result.error || 'Failed to load thumbnail cache stats');
+            }
+
+            renderThumbnailCacheStats(result.data || {});
+        } catch (error) {
+            console.error('Error loading thumbnail cache stats:', error);
+            renderThumbnailCacheStats({ fileCount: 0, totalBytes: 0, totalSizeHuman: 'n/a' });
+        } finally {
+            if (refreshBtn) {
+                refreshBtn.disabled = false;
+            }
+        }
+    }
+
     function setRestartProgress(percent, message) {
         const clamped = Math.max(0, Math.min(100, Math.floor(percent)));
         if (restartOverlayBar) {
@@ -648,6 +705,72 @@ function initializeFormHandlers() {
             }
         });
     }
+
+    const refreshThumbnailCacheStatsBtn = document.getElementById('refreshThumbnailCacheStatsBtn');
+    if (refreshThumbnailCacheStatsBtn) {
+        refreshThumbnailCacheStatsBtn.addEventListener('click', async () => {
+            await refreshThumbnailCacheStats();
+        });
+    }
+
+    const clearThumbnailCacheBtn = document.getElementById('clearThumbnailCacheBtn');
+    if (clearThumbnailCacheBtn) {
+        clearThumbnailCacheBtn.addEventListener('click', async () => {
+            const confirmResult = await Swal.fire({
+                icon: 'warning',
+                title: 'Clear thumbnail cache?',
+                text: 'This will delete all locally cached thumbnail previews. They will be downloaded again when needed.',
+                showCancelButton: true,
+                confirmButtonColor: '#d33',
+                cancelButtonColor: '#3085d6',
+                confirmButtonText: 'Yes, clear thumbnail cache'
+            });
+
+            if (!confirmResult.isConfirmed) {
+                return;
+            }
+
+            const originalHtml = clearThumbnailCacheBtn.innerHTML;
+
+            try {
+                clearThumbnailCacheBtn.disabled = true;
+                clearThumbnailCacheBtn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Clearing...';
+
+                const response = await fetch('/api/settings/thumbnail-cache/clear', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json'
+                    }
+                });
+
+                const result = await response.json();
+                if (!response.ok || !result.success) {
+                    throw new Error(result.error || 'Failed to clear thumbnail cache');
+                }
+
+                renderThumbnailCacheStats(result.remaining || {});
+
+                await Swal.fire({
+                    icon: 'success',
+                    title: 'Thumbnail cache cleared',
+                    text: result.message || `Removed ${result.removedFiles || 0} files.`
+                });
+            } catch (error) {
+                console.error('Error clearing thumbnail cache:', error);
+                await Swal.fire({
+                    icon: 'error',
+                    title: 'Action failed',
+                    text: error.message || 'Failed to clear thumbnail cache.'
+                });
+            } finally {
+                clearThumbnailCacheBtn.disabled = false;
+                clearThumbnailCacheBtn.innerHTML = originalHtml;
+                await refreshThumbnailCacheStats();
+            }
+        });
+    }
+
+    refreshThumbnailCacheStats();
 
     const resetLocalOverridesBtn = document.getElementById('resetLocalOverridesBtn');
     if (resetLocalOverridesBtn) {
