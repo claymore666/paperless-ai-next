@@ -1,0 +1,145 @@
+name: Nightly Build
+
+on:
+  push:
+    branches:
+      - 'fix/*'
+      - 'nightly'
+
+permissions:
+  contents: write
+  packages: write
+
+env:
+  REGISTRY: ghcr.io
+  IMAGE_NAME: ${{ github.repository }}
+
+jobs:
+  merge-to-nightly:
+    # Only run merge step for fix/* branches, skip for direct nightly pushes
+    if: startsWith(github.ref, 'refs/heads/fix/')
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Configure git
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+
+      - name: Merge fix branch into nightly
+        run: |
+          git checkout nightly
+          git merge ${{ github.ref_name }} --no-edit -m "auto-merge: ${{ github.ref_name }} into nightly"
+          git push origin nightly
+
+  build-and-tag:
+    runs-on: ubuntu-latest
+    needs: [merge-to-nightly]
+    if: always() && (needs.merge-to-nightly.result == 'success' || needs.merge-to-nightly.result == 'skipped')
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: nightly
+
+      - name: Set date tag
+        id: date
+        run: echo "tag=$(date +%Y-%m-%d)" >> "$GITHUB_OUTPUT"
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      # Build standard image (modern CPUs, numpy>=2 OK)
+      - name: Build base image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: Dockerfile.base.full
+          load: true
+          tags: paperless-ai-next:latest-base-full
+          cache-from: type=gha,scope=base-full
+          cache-to: type=gha,mode=max,scope=base-full
+
+      - name: Build and push full image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: Dockerfile
+          push: true
+          build-args: |
+            BASE_IMAGE=paperless-ai-next:latest-base-full
+            PAPERLESS_AI_COMMIT_SHA=${{ github.sha }}
+          tags: |
+            ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:nightly-full
+            ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:nightly-${{ steps.date.outputs.tag }}
+          cache-from: type=gha,scope=app-full
+          cache-to: type=gha,mode=max,scope=app-full
+
+      # Build legacy image (Ivy Bridge / pre-AVX2 CPUs, numpy<2)
+      - name: Pin numpy<2 for legacy CPU compatibility
+        run: |
+          sed -i 's|numpy>=1.24.2|numpy>=1.24.2,<2.0.0|' requirements.txt
+
+      - name: Build legacy base image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: Dockerfile.base.full
+          load: true
+          tags: paperless-ai-next:latest-base-full-legacy
+          cache-from: type=gha,scope=base-full-legacy
+          cache-to: type=gha,mode=max,scope=base-full-legacy
+
+      - name: Build and push legacy image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: Dockerfile
+          push: true
+          build-args: |
+            BASE_IMAGE=paperless-ai-next:latest-base-full-legacy
+            PAPERLESS_AI_COMMIT_SHA=${{ github.sha }}
+          tags: |
+            ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:nightly-full-legacy
+            ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:nightly-legacy-${{ steps.date.outputs.tag }}
+          cache-from: type=gha,scope=app-full-legacy
+          cache-to: type=gha,mode=max,scope=app-full-legacy
+
+      - name: Create git tag
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          TAG="nightly-${{ steps.date.outputs.tag }}"
+          git tag -d "$TAG" 2>/dev/null || true
+          git push origin ":refs/tags/$TAG" 2>/dev/null || true
+          git tag "$TAG"
+          git push origin "$TAG"
+
+      - name: Create release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: nightly-${{ steps.date.outputs.tag }}
+          name: Nightly ${{ steps.date.outputs.tag }}
+          body: |
+            Automated nightly build from `nightly` branch.
+
+            Includes all fix branches merged to date.
+
+            ## Docker images
+
+            | Image | CPU | Pull command |
+            |-------|-----|-------------|
+            | `nightly-full` | Modern (AVX2+) | `docker pull ghcr.io/${{ github.repository }}:nightly-full` |
+            | `nightly-full-legacy` | Legacy (Ivy Bridge, pre-AVX2) | `docker pull ghcr.io/${{ github.repository }}:nightly-full-legacy` |
+          prerelease: true
+          generate_release_notes: false
