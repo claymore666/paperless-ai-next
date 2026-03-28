@@ -60,13 +60,13 @@ jobs:
         uses: docker/setup-buildx-action@v3
 
       # Build standard image (modern CPUs, numpy>=2 OK)
-      - name: Build base image
+      - name: Build and push base image
         uses: docker/build-push-action@v6
         with:
           context: .
           file: Dockerfile.base.full
-          load: true
-          tags: paperless-ai-next:latest-base-full
+          push: true
+          tags: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:nightly-base-full
           cache-from: type=gha,scope=base-full
           cache-to: type=gha,mode=max,scope=base-full
 
@@ -77,7 +77,7 @@ jobs:
           file: Dockerfile
           push: true
           build-args: |
-            BASE_IMAGE=paperless-ai-next:latest-base-full
+            BASE_IMAGE=${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:nightly-base-full
             PAPERLESS_AI_COMMIT_SHA=${{ github.sha }}
           tags: |
             ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:nightly-full
@@ -90,13 +90,13 @@ jobs:
         run: |
           sed -i 's|numpy>=1.24.2|numpy>=1.24.2,<2.0.0|' requirements.txt
 
-      - name: Build legacy base image
+      - name: Build and push legacy base image
         uses: docker/build-push-action@v6
         with:
           context: .
           file: Dockerfile.base.full
-          load: true
-          tags: paperless-ai-next:latest-base-full-legacy
+          push: true
+          tags: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:nightly-base-full-legacy
           cache-from: type=gha,scope=base-full-legacy
           cache-to: type=gha,mode=max,scope=base-full-legacy
 
@@ -107,7 +107,7 @@ jobs:
           file: Dockerfile
           push: true
           build-args: |
-            BASE_IMAGE=paperless-ai-next:latest-base-full-legacy
+            BASE_IMAGE=${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:nightly-base-full-legacy
             PAPERLESS_AI_COMMIT_SHA=${{ github.sha }}
           tags: |
             ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:nightly-full-legacy
