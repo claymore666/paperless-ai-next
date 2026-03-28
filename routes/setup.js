@@ -5500,7 +5500,7 @@ router.get('/settings', async (req, res) => {
     SCAN_INTERVAL: process.env.SCAN_INTERVAL || '*/30 * * * *',
     RECONCILIATION_INTERVAL: process.env.RECONCILIATION_INTERVAL || '0 * * * *',
     RECONCILIATION_ENABLED: process.env.RECONCILIATION_ENABLED || 'yes',
-    SYSTEM_PROMPT: process.env.SYSTEM_PROMPT || '',,
+    SYSTEM_PROMPT: process.env.SYSTEM_PROMPT || '',
     PROCESS_PREDEFINED_DOCUMENTS: process.env.PROCESS_PREDEFINED_DOCUMENTS || 'no',
     
     TOKEN_LIMIT: process.env.TOKEN_LIMIT || 128000,
