@@ -25,6 +25,12 @@ fi
 # Keep Node.js and Python services on the same verbosity level.
 export LOG_LEVEL="${LOG_LEVEL:-info}"
 
+# Generate a shared secret for internal Node.js ↔ Python service auth.
+if [[ -z "$RAG_API_SECRET" ]]; then
+	RAG_API_SECRET="$(head -c 32 /dev/urandom | base64 | tr -d '/+=' | head -c 32)"
+	export RAG_API_SECRET
+fi
+
 # Start the Python RAG service in the background
 echo "Starting Python RAG service (LOG_LEVEL=${LOG_LEVEL})..."
 "$PYTHON_BIN" main.py --host 127.0.0.1 --port 8000 &
