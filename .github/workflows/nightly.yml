@@ -33,13 +33,16 @@ jobs:
       - name: Merge fix branch into nightly
         run: |
           git checkout nightly
-          git merge ${{ github.ref_name }} --no-edit -m "auto-merge: ${{ github.ref_name }} into nightly"
-          git push origin nightly
+          if git merge --no-edit -m "auto-merge: ${{ github.ref_name }} into nightly" ${{ github.ref_name }}; then
+            git push origin nightly || echo "Nothing to push (already up to date)"
+          else
+            echo "Merge failed or already merged — skipping"
+          fi
 
   build-and-tag:
     runs-on: ubuntu-latest
     needs: [merge-to-nightly]
-    if: always() && (needs.merge-to-nightly.result == 'success' || needs.merge-to-nightly.result == 'skipped')
+    if: always() && (needs.merge-to-nightly.result != 'cancelled')
     steps:
       - uses: actions/checkout@v4
         with:
@@ -115,7 +118,7 @@ jobs:
           cache-from: type=gha,scope=app-full-legacy
           cache-to: type=gha,mode=max,scope=app-full-legacy
 
-      - name: Create git tag
+      - name: Create or update git tag
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
@@ -124,6 +127,13 @@ jobs:
           git push origin ":refs/tags/$TAG" 2>/dev/null || true
           git tag "$TAG"
           git push origin "$TAG"
+
+      - name: Delete existing release if same day
+        run: |
+          TAG="nightly-${{ steps.date.outputs.tag }}"
+          gh release delete "$TAG" --yes 2>/dev/null || true
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Create release
         uses: softprops/action-gh-release@v2
