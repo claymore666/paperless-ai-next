@@ -1763,6 +1763,10 @@ async getOrCreateDocumentType(name, options = {}) {
       }
 
       let updateData;
+      // Remove null/undefined dates before processing
+      if (updates.created === null || updates.created === undefined) {
+        delete updates.created;
+      }
       try {
         if (updates.created) {
           let dateObject;
