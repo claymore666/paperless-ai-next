@@ -39,7 +39,7 @@ class PaperlessService {
   initialize() {
     if (!this.client && config.paperless.apiUrl && config.paperless.apiToken) {
       // Normalize URL to avoid double /api/ paths when setup wizard appends /api
-      const baseURL = config.paperless.apiUrl.replace(/\/api\/?$/, '') + '/api';
+      const baseURL = config.paperless.apiUrl.replace(/\/+$/, '').replace(/\/api$/, '') + '/api';
       this.client = axios.create({
         baseURL,
         headers: {
@@ -308,7 +308,7 @@ class PaperlessService {
     }
 
   async initializeWithCredentials(apiUrl, apiToken) {
-    const baseURL = apiUrl.replace(/\/api\/?$/, '') + '/api';
+    const baseURL = apiUrl.replace(/\/+$/, '').replace(/\/api$/, '') + '/api';
     this.client = axios.create({
       baseURL,
       headers: {
